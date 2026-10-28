@@ -3,6 +3,7 @@ import { createContext, use, useEffect, useState, type PropsWithChildren } from 
 
 import { authApi, setAuthToken } from '@/lib/api';
 import { borrarCache, usarCacheDe } from '@/lib/offline';
+import { cerrarGoogle, iniciarConGoogle } from '@/lib/google';
 import { cancelarRecordatorios } from '@/lib/recordatorios';
 import { getItem, setItem } from '@/lib/storage';
 import type { User } from '@/lib/types';
@@ -16,6 +17,8 @@ interface AuthContextValue {
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<void>;
+  /** Selector de cuentas de Google; si se cancela, no pasa nada. Crea la cuenta si no existe. */
+  signInConGoogle: () => Promise<void>;
   /** Con el código que llegó al correo: cambia la contraseña e inicia sesión. */
   restablecerPassword: (email: string, codigo: string, password: string) => Promise<void>;
   /** Tras editar el perfil: reemplaza el usuario en memoria y el guardado. */
@@ -49,6 +52,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     await borrarCache().catch(() => {});
     // Los recordatorios agendados son de esta cuenta.
     await cancelarRecordatorios().catch(() => {});
+    // Y la próxima vez Google vuelve a preguntar con qué cuenta entrar.
+    await cerrarGoogle();
   }
 
   // Al abrir la app: si hay sesión guardada se entra de inmediato con el usuario
@@ -95,6 +100,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
     isLoading,
     signIn: async (email, password) => guardarSesion(await authApi.login(email, password)),
     signUp: async (name, email, password) => guardarSesion(await authApi.register(name, email, password)),
+    signInConGoogle: async () => {
+      const idToken = await iniciarConGoogle();
+      if (idToken) await guardarSesion(await authApi.google(idToken));
+    },
     restablecerPassword: async (email, codigo, password) =>
       guardarSesion(await authApi.restablecerPassword(email, codigo, password)),
     actualizarUsuario: async (actual) => {

@@ -8,6 +8,8 @@ export interface User {
   email: string;
   /** Enlace firmado a la foto de perfil (dura una semana), o null. */
   foto_url: string | null;
+  /** false si entró con Google y aún no creó una contraseña (opcional: usuarios guardados antes). */
+  tiene_password?: boolean;
 }
 
 export interface Categoria {

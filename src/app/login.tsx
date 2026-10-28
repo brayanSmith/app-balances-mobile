@@ -2,7 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
+import { isAxiosError } from 'axios';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -18,6 +20,7 @@ import { Boton } from '@/components/Boton';
 import { RecuperarSheet } from '@/components/RecuperarSheet';
 import { useSession } from '@/context/auth';
 import { mensajeDeError } from '@/lib/api';
+import { googleDisponible } from '@/lib/google';
 import { useEstilos, useTema } from '@/context/tema';
 import { degradado, type NombreIcono, type Paleta, radio } from '@/lib/theme';
 
@@ -25,7 +28,7 @@ export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { colores, esOscuro, setPreferencia } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { signIn, signUp } = useSession();
+  const { signIn, signUp, signInConGoogle } = useSession();
   const [modo, setModo] = useState<'login' | 'registro'>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -34,6 +37,7 @@ export default function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [recuperando, setRecuperando] = useState(false);
+  const [conGoogle, setConGoogle] = useState(false);
 
   const esRegistro = modo === 'registro';
 
@@ -46,6 +50,20 @@ export default function LoginScreen() {
     } catch (e) {
       setError(mensajeDeError(e));
       setEnviando(false);
+    }
+  }
+
+  // Sirve igual para entrar o registrarse: si la cuenta no existe, la API la crea.
+  async function entrarConGoogle() {
+    setError(null);
+    setConGoogle(true);
+    try {
+      await signInConGoogle();
+    } catch (e) {
+      // Los errores del selector de Google ya vienen en español; los de la API, por mensajeDeError.
+      setError(e instanceof Error && !isAxiosError(e) ? e.message : mensajeDeError(e));
+    } finally {
+      setConGoogle(false);
     }
   }
 
@@ -106,6 +124,31 @@ export default function LoginScreen() {
             {error && <Text style={styles.error}>{error}</Text>}
 
             <Boton texto={esRegistro ? 'Registrarme' : 'Entrar'} onPress={enviar} cargando={enviando} />
+
+            {googleDisponible && (
+              <>
+                <View style={styles.separador}>
+                  <View style={styles.linea} />
+                  <Text style={styles.separadorTexto}>o</Text>
+                  <View style={styles.linea} />
+                </View>
+                <Pressable
+                  onPress={entrarConGoogle}
+                  disabled={conGoogle || enviando}
+                  style={({ pressed }) => [styles.google, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                >
+                  {conGoogle ? (
+                    <ActivityIndicator color={colores.texto} />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-google" size={20} color="#4285F4" />
+                      <Text style={styles.googleTexto}>Continuar con Google</Text>
+                    </>
+                  )}
+                </Pressable>
+              </>
+            )}
 
             <Pressable
               onPress={() => {
@@ -196,4 +239,19 @@ const crearEstilos = (colores: Paleta) =>
     error: { color: colores.gasto, fontSize: 14 },
     link: { color: colores.textoSuave, textAlign: 'center', marginTop: 4 },
     linkFuerte: { color: colores.primario, fontWeight: '700' },
+    separador: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    linea: { flex: 1, height: 1, backgroundColor: colores.borde },
+    separadorTexto: { color: colores.textoSuave, fontSize: 13 },
+    google: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      minHeight: 54,
+      borderRadius: radio.md,
+      borderWidth: 1.5,
+      borderColor: colores.borde,
+      backgroundColor: colores.tarjeta,
+    },
+    googleTexto: { fontSize: 16, fontWeight: '600', color: colores.texto },
   });

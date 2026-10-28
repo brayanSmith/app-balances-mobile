@@ -142,6 +142,8 @@ function DatosPersonales() {
 
   const cambiaCorreo = email.trim() !== user?.email;
   const hayCambios = name.trim() !== user?.name || cambiaCorreo;
+  // Entró con Google y aún no tiene contraseña: para cambiar el correo primero debe crearla.
+  const sinPassword = user?.tiene_password === false;
 
   async function guardar() {
     setError(null);
@@ -174,15 +176,20 @@ function DatosPersonales() {
         keyboardType="email-address"
         autoComplete="email"
       />
-      {cambiaCorreo && (
-        <Campo
-          etiqueta="Contraseña actual"
-          ayuda="Para cambiar el correo con el que entras."
-          value={passwordActual}
-          onChangeText={setPasswordActual}
-          secreto
-        />
-      )}
+      {cambiaCorreo &&
+        (sinPassword ? (
+          <Text style={styles.error}>
+            Entraste con Google: para cambiar el correo, primero crea una contraseña más abajo.
+          </Text>
+        ) : (
+          <Campo
+            etiqueta="Contraseña actual"
+            ayuda="Para cambiar el correo con el que entras."
+            value={passwordActual}
+            onChangeText={setPasswordActual}
+            secreto
+          />
+        ))}
 
       {error && <Text style={styles.error}>{error}</Text>}
       {listo && !hayCambios && <Exito texto="Datos guardados." />}
@@ -190,7 +197,9 @@ function DatosPersonales() {
         texto="Guardar cambios"
         onPress={guardar}
         cargando={guardando}
-        deshabilitado={!hayCambios || !name.trim() || !email.trim() || (cambiaCorreo && !passwordActual)}
+        deshabilitado={
+          !hayCambios || !name.trim() || !email.trim() || (cambiaCorreo && (sinPassword || !passwordActual))
+        }
       />
     </Seccion>
   );
@@ -198,6 +207,9 @@ function DatosPersonales() {
 
 function CambiarPassword() {
   const styles = useEstilos(crearEstilos);
+  const { user, actualizarUsuario } = useSession();
+  // Entró con Google y aún no tiene contraseña: la crea, sin pedir una "actual".
+  const crear = user?.tiene_password === false;
   const [actual, setActual] = useState('');
   const [nueva, setNueva] = useState('');
   const [confirmacion, setConfirmacion] = useState('');
@@ -212,7 +224,8 @@ function CambiarPassword() {
     setListo(false);
     setGuardando(true);
     try {
-      await perfilApi.cambiarPassword(actual, nueva, confirmacion);
+      await perfilApi.cambiarPassword(crear ? null : actual, nueva, confirmacion);
+      if (crear && user) await actualizarUsuario({ ...user, tiene_password: true });
       setActual('');
       setNueva('');
       setConfirmacion('');
@@ -225,8 +238,14 @@ function CambiarPassword() {
   }
 
   return (
-    <Seccion icono="lock-closed-outline" titulo="Cambiar contraseña">
-      <Campo etiqueta="Contraseña actual" value={actual} onChangeText={setActual} secreto />
+    <Seccion icono="lock-closed-outline" titulo={crear ? 'Crear contraseña' : 'Cambiar contraseña'}>
+      {crear ? (
+        <Text style={styles.ayuda}>
+          Entraste con Google. Crea una contraseña si también quieres entrar con tu correo.
+        </Text>
+      ) : (
+        <Campo etiqueta="Contraseña actual" value={actual} onChangeText={setActual} secreto />
+      )}
       <Campo
         etiqueta="Contraseña nueva"
         ayuda="Mínimo 8 caracteres."
@@ -246,12 +265,12 @@ function CambiarPassword() {
 
       {noCoinciden && <Text style={styles.error}>Las contraseñas no coinciden.</Text>}
       {error && <Text style={styles.error}>{error}</Text>}
-      {listo && <Exito texto="Contraseña actualizada. Se cerró la sesión en tus otros dispositivos." />}
+      {listo && <Exito texto="Contraseña guardada. Se cerró la sesión en tus otros dispositivos." />}
       <Boton
-        texto="Cambiar contraseña"
+        texto={crear ? 'Crear contraseña' : 'Cambiar contraseña'}
         onPress={guardar}
         cargando={guardando}
-        deshabilitado={!actual || nueva.length < 8 || nueva !== confirmacion}
+        deshabilitado={(!crear && !actual) || nueva.length < 8 || nueva !== confirmacion}
       />
     </Seccion>
   );

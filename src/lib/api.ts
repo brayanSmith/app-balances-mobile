@@ -36,6 +36,7 @@ export const api = create({
 const SIN_CAMBIOS = [
   '/login',
   '/register',
+  '/auth/google',
   '/logout',
   '/password/codigo',
   '/password/restablecer',
@@ -87,6 +88,8 @@ export const authApi = {
     api.post<AuthResponse>('/login', { email, password }).then((r) => r.data),
   register: (name: string, email: string, password: string) =>
     api.post<AuthResponse>('/register', { name, email, password }).then((r) => r.data),
+  /** Entra (o crea la cuenta) con el ID token que dio Google. */
+  google: (idToken: string) => api.post<AuthResponse>('/auth/google', { id_token: idToken }).then((r) => r.data),
   logout: () => api.post('/logout'),
   /** "¿Olvidaste tu contraseña?": envía un código de 6 dígitos al correo. */
   pedirCodigo: (email: string) =>
@@ -148,8 +151,13 @@ export const perfilApi = {
   /** Cambiar el correo pide la contraseña actual. */
   actualizar: (datos: { name: string; email: string; password_actual?: string }) =>
     api.put<User>('/perfil', datos).then((r) => r.data),
-  cambiarPassword: (password_actual: string, password: string, password_confirmation: string) =>
-    api.put<{ message: string }>('/perfil/password', { password_actual, password, password_confirmation }),
+  /** Sin `password_actual` (null): crea la contraseña de quien entró con Google. */
+  cambiarPassword: (password_actual: string | null, password: string, password_confirmation: string) =>
+    api.put<{ message: string }>('/perfil/password', {
+      ...(password_actual !== null && { password_actual }),
+      password,
+      password_confirmation,
+    }),
   subirFoto: async (foto: ArchivoLocal) =>
     api.post<User>('/perfil/foto', await formularioConArchivo(foto, {}, 'foto'), multipart).then((r) => r.data),
   quitarFoto: () => api.delete<User>('/perfil/foto').then((r) => r.data),
