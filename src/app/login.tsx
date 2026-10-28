@@ -58,7 +58,8 @@ export default function LoginScreen() {
       >
         <Ionicons name={esOscuro ? 'sunny-outline' : 'moon-outline'} size={20} color="#fff" />
       </Pressable>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* También en Android: con edge-to-edge el sistema ya no achica la pantalla al abrir el teclado. */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'web' ? undefined : 'padding'}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={[styles.marca, { paddingTop: insets.top + 48 }]}>
             <View style={styles.logo}>

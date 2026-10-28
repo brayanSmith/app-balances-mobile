@@ -97,10 +97,8 @@ export function BottomSheet({ visible, onClose, titulo, pie, children }: Props) 
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Cerrar" />
       </Animated.View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.contenedor}
-      >
+      {/* También en Android: con edge-to-edge el sistema ya no achica la pantalla al abrir el teclado. */}
+      <KeyboardAvoidingView behavior={nativo ? 'padding' : undefined} style={styles.contenedor}>
         <Animated.View
           style={[
             styles.hoja,
@@ -140,6 +138,8 @@ const crearEstilos = (colores: Paleta) =>
     contenedor: { flex: 1, justifyContent: 'flex-end', alignItems: 'center', pointerEvents: 'box-none' },
     hoja: {
       width: '100%',
+      // Con el teclado abierto queda menos alto: la hoja se encoge y su contenido hace scroll.
+      flexShrink: 1,
       maxWidth: 560,
       backgroundColor: colores.tarjeta,
       borderTopLeftRadius: radio.lg,
