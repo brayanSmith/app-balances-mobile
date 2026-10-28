@@ -73,6 +73,8 @@ export interface FiltrosMovimientos {
   hasta?: string;
   tipo?: TipoMovimiento;
   q?: string;
+  /** Agrupación del gráfico de evolución; sin ella la API elige según el largo. */
+  agrupacion?: 'dia' | 'semana' | 'mes' | 'anio';
 }
 
 /** Programado con un vencimiento por pagar (o por recibir, si es ingreso). */

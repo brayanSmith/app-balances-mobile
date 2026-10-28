@@ -1,48 +1,40 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  SectionList,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { EstadoConexion } from '@/components/EstadoConexion';
-import { agruparPorDia, EncabezadoDia, FilaMovimiento } from '@/components/FilaMovimiento';
+import {
+  agruparPorDiaConTotales,
+  EncabezadoDia,
+  FilaGrupo,
+  FilaMovimiento,
+  type Grupo,
+} from '@/components/FilaMovimiento';
+import { FiltroPeriodo, rangoDePeriodo, type Periodo } from '@/components/FiltroPeriodo';
 import { GraficoEvolucion } from '@/components/GraficoEvolucion';
 import { MovimientoSheet } from '@/components/MovimientoSheet';
-import { Segmentado } from '@/components/Segmentado';
+import { Segmentado, type OpcionSegmentado } from '@/components/Segmentado';
 import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
 import { mensajeDeError, movimientosApi } from '@/lib/api';
-import { ayer, desplazar, esFechaValida, formatearFechaCorta, formatearMonto, hoy } from '@/lib/format';
-import { conCache, hayConexion } from '@/lib/offline';
+import { desplazar, esFechaValida, formatearFechaCorta, formatearMonto, hoy } from '@/lib/format';
+import { evolucion as calcularEvolucion, filtrar, totales, type FiltrosHistorial } from '@/lib/historial';
+import { conCache } from '@/lib/offline';
 import { radio, type Paleta } from '@/lib/theme';
-import type { Movimiento, Resumen, TipoMovimiento } from '@/lib/types';
+import type { Evolucion, Movimiento, TipoMovimiento } from '@/lib/types';
 
-type Periodo = 'hoy' | 'ayer' | 'semana' | 'mes' | 'anio' | 'personalizado';
-
-const PERIODOS: { valor: Periodo; texto: string }[] = [
-  { valor: 'hoy', texto: 'Hoy' },
-  { valor: 'ayer', texto: 'Ayer' },
-  { valor: 'semana', texto: 'Última semana' },
-  { valor: 'mes', texto: 'Último mes' },
-  { valor: 'anio', texto: 'Último año' },
-  { valor: 'personalizado', texto: 'Personalizado' },
-];
-
-/** Rango de fechas de cada período, contado hacia atrás desde hoy (incluye hoy). */
-function rangoDePeriodo(periodo: Exclude<Periodo, 'personalizado'>) {
-  const h = hoy();
-  switch (periodo) {
-    case 'hoy':
-      return { desde: h, hasta: h };
-    case 'ayer':
-      return { desde: ayer(), hasta: ayer() };
-    case 'semana':
-      return { desde: desplazar(h, -6, 'dias'), hasta: h };
-    case 'mes':
-      return { desde: desplazar(h, -1, 'meses'), hasta: h };
-    case 'anio':
-      return { desde: desplazar(h, -1, 'anios'), hasta: h };
-  }
-}
+type Agrupacion = Evolucion['agrupacion'];
 
 interface EstadoSheet {
   abierto: boolean;
@@ -58,16 +50,15 @@ export default function HistorialScreen() {
   const [desdePersonalizado, setDesdePersonalizado] = useState(() => desplazar(hoy(), -1, 'meses'));
   const [hastaPersonalizado, setHastaPersonalizado] = useState(hoy);
   const [tipo, setTipo] = useState<'todos' | TipoMovimiento>('todos');
+  // null: la API elige según el largo del período (en "Todo", por mes).
+  const [agrupacionElegida, setAgrupacion] = useState<Agrupacion | null>(null);
   const [busqueda, setBusqueda] = useState('');
   const [q, setQ] = useState(''); // la búsqueda se aplica cuando se deja de escribir
 
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
-  const [resumen, setResumen] = useState<Resumen | null>(null);
-  const [pagina, setPagina] = useState(1);
-  const [ultimaPagina, setUltimaPagina] = useState(1);
-  const [total, setTotal] = useState(0);
+  // Todos los movimientos: se piden una vez y los filtros se aplican aquí.
+  const [todos, setTodos] = useState<Movimiento[]>([]);
   const [cargando, setCargando] = useState(true);
-  const [cargandoMas, setCargandoMas] = useState(false);
+  const [refrescando, setRefrescando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [guardadoEn, setGuardadoEn] = useState<number | null>(null);
   const { version } = useSincronizacion();
@@ -76,91 +67,111 @@ export default function HistorialScreen() {
     id: null,
     clave: 0,
   });
-  // Si los filtros cambian mientras carga, se descarta la respuesta vieja.
+  // Si llega una respuesta vieja después de una más nueva, se descarta.
   const peticion = useRef(0);
 
+  // Buscar ya no pide nada al servidor: solo una pausa corta para no filtrar en cada tecla.
   useEffect(() => {
-    const t = setTimeout(() => setQ(busqueda.trim()), 400);
+    const t = setTimeout(() => setQ(busqueda.trim()), 150);
     return () => clearTimeout(t);
   }, [busqueda]);
 
-  const rango = periodo === 'personalizado' ? null : rangoDePeriodo(periodo);
-  const desde = rango?.desde ?? desdePersonalizado;
-  const hasta = rango?.hasta ?? hastaPersonalizado;
-  const fechasValidas = esFechaValida(desde) && esFechaValida(hasta) && desde <= hasta;
+  // "Todo": sin fecha de inicio (la API arranca en el primer movimiento) y el gráfico por mes.
+  const esTodo = periodo === 'todo';
+  const rango = periodo === 'personalizado' || esTodo ? null : rangoDePeriodo(periodo);
+  const desde = esTodo ? undefined : (rango?.desde ?? desdePersonalizado);
+  const hasta = rango?.hasta ?? (esTodo ? hoy() : hastaPersonalizado);
+  const fechasValidas =
+    desde === undefined || (esFechaValida(desde) && esFechaValida(hasta) && desde <= hasta);
 
-  const filtros = useMemo(
-    () => ({
-      desde,
-      hasta,
-      tipo: tipo === 'todos' ? undefined : tipo,
-      q: q || undefined,
-    }),
+  const filtros = useMemo<FiltrosHistorial>(
+    () => ({ desde, hasta, tipo: tipo === 'todos' ? undefined : tipo, q: q || undefined }),
     [desde, hasta, tipo, q],
   );
 
-  // forzar: no usar lo que está en memoria (deslizar para recargar, Reintentar).
+  // Por día solo en períodos de hasta un año (si no, serían miles de puntos).
+  const diasDelRango = desde === undefined ? Infinity : (Date.parse(hasta) - Date.parse(desde)) / 86_400_000;
+  const agrupaciones: OpcionSegmentado<Agrupacion>[] = [
+    ...(diasDelRango <= 366 ? [{ valor: 'dia' as const, texto: 'Día' }] : []),
+    { valor: 'semana', texto: 'Semana' },
+    { valor: 'mes', texto: 'Mes' },
+    { valor: 'anio', texto: 'Año' },
+  ];
+
+  function cambiarPeriodo(nuevo: Periodo) {
+    setPeriodo(nuevo);
+    setAgrupacion(null); // cada período arranca con la agrupación que mejor le queda
+  }
+
+  /**
+   * Una sola petición con todos los movimientos. Al volver a la pantalla se usa lo
+   * que está en memoria; solo se pide de nuevo si algo cambió (crear, editar,
+   * borrar, sincronizar), pasados 10 minutos o al deslizar para recargar (forzar).
+   */
   const cargar = useCallback(
     async (forzar = false) => {
-      if (!fechasValidas) return;
       const n = ++peticion.current;
-      setCargando(true);
       setError(null);
       try {
-        // Sin conexión se muestra la primera página guardada de este mismo filtro
-        // (los periodos se guardan por nombre: "último mes" es el último que se cargó).
-        const clave = `historial:${periodo === 'personalizado' ? `${filtros.desde}:${filtros.hasta}` : periodo}:${filtros.tipo ?? ''}:${filtros.q ?? ''}`;
-        const [primera, totales] = await Promise.all([
-          conCache(`${clave}:lista`, () => movimientosApi.pagina(filtros, 1), {
-            forzar,
-          }),
-          conCache(`${clave}:resumen`, () => movimientosApi.resumen(filtros), {
-            forzar,
-          }),
-        ]);
+        const r = await conCache('historial:todos', () => movimientosApi.listar({}), { forzar });
         if (n !== peticion.current) return;
-        setMovimientos(primera.datos.data);
-        setPagina(1);
-        setUltimaPagina(primera.datos.meta.last_page);
-        setTotal(primera.datos.meta.total);
-        setResumen(totales.datos);
-        setGuardadoEn(primera.guardadoEn ?? totales.guardadoEn);
+        setTodos(r.datos);
+        setGuardadoEn(r.guardadoEn);
       } catch (e) {
         if (n === peticion.current) setError(mensajeDeError(e));
       } finally {
         if (n === peticion.current) setCargando(false);
       }
-      // "version" cambia al enviar lo que estaba en cola o al volver la conexión: hay que recargar.
+      // "version" cambia al enviar lo que estaba en cola o al volver la conexión.
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filtros, fechasValidas, periodo, version],
+    [version],
   );
 
-  // Carga al entrar y cada vez que cambia un filtro.
   useFocusEffect(
     useCallback(() => {
       cargar();
     }, [cargar]),
   );
 
-  async function cargarMas() {
-    if (cargando || cargandoMas || pagina >= ultimaPagina || !hayConexion()) return;
-    const n = peticion.current;
-    setCargandoMas(true);
-    try {
-      const siguiente = await movimientosApi.pagina(filtros, pagina + 1);
-      if (n !== peticion.current) return;
-      setMovimientos((lista) => [...lista, ...siguiente.data]);
-      setPagina(siguiente.meta.current_page);
-    } catch (e) {
-      setError(mensajeDeError(e));
-    } finally {
-      setCargandoMas(false);
-    }
+  async function refrescar() {
+    setRefrescando(true);
+    await cargar(true);
+    setRefrescando(false);
   }
 
-  const secciones = useMemo(() => agruparPorDia(movimientos), [movimientos]);
-  const balance = resumen?.balance ?? 0;
+  // Todo lo que sigue se calcula en el teléfono, sin peticiones.
+  const movimientos = useMemo(() => (fechasValidas ? filtrar(todos, filtros) : []), [todos, filtros, fechasValidas]);
+  const resumen = useMemo(() => totales(movimientos), [movimientos]);
+  const evolucion = useMemo(
+    () =>
+      fechasValidas
+        ? calcularEvolucion(movimientos, filtros, agrupacionElegida ?? (esTodo ? 'mes' : undefined))
+        : null,
+    [movimientos, filtros, agrupacionElegida, esTodo, fechasValidas],
+  );
+  const total = movimientos.length;
+  // Por semana, mes o año la lista es de totales por grupo, no de movimientos.
+  const agrupado = !!evolucion && evolucion.agrupacion !== 'dia';
+  const secciones = useMemo(() => agruparPorDiaConTotales(movimientos, evolucion), [movimientos, evolucion]);
+  const grupos = useMemo<Grupo[]>(() => {
+    if (!evolucion || evolucion.agrupacion === 'dia') return [];
+    const { puntos } = evolucion;
+    const finPeriodo = hasta < hoy() ? hasta : hoy();
+    return puntos
+      .map((p, i) => ({ ...p, hasta: i < puntos.length - 1 ? desplazar(puntos[i + 1].desde, -1, 'dias') : finPeriodo }))
+      .filter((g) => g.ingresos !== 0 || g.gastos !== 0)
+      .reverse(); // el más reciente primero, como los movimientos
+  }, [evolucion, hasta]);
+
+  // Tocar un grupo abre ese período con sus movimientos.
+  function verGrupo(grupo: Grupo) {
+    setPeriodo('personalizado');
+    setDesdePersonalizado(grupo.desde);
+    setHastaPersonalizado(grupo.hasta);
+    setAgrupacion(null);
+  }
+  const balance = resumen.balance;
   const cerrarSheet = () => setSheet((s) => ({ ...s, abierto: false }));
 
   const encabezado = (
@@ -184,31 +195,15 @@ export default function HistorialScreen() {
         )}
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodos}>
-        {PERIODOS.map((p) => {
-          const activo = p.valor === periodo;
-          return (
-            <Pressable
-              key={p.valor}
-              onPress={() => setPeriodo(p.valor)}
-              style={[styles.periodo, activo && styles.periodoActivo]}
-            >
-              {p.valor === 'personalizado' && (
-                <Ionicons name="calendar-outline" size={14} color={activo ? '#fff' : colores.texto} />
-              )}
-              <Text style={[styles.periodoTexto, activo && styles.periodoTextoActivo]}>{p.texto}</Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-
-      {periodo === 'personalizado' && (
-        <View style={styles.personalizado}>
-          <CampoFecha etiqueta="Desde" valor={desdePersonalizado} onChange={setDesdePersonalizado} />
-          <Ionicons name="arrow-forward" size={18} color={colores.textoSuave} style={{ marginTop: 22 }} />
-          <CampoFecha etiqueta="Hasta" valor={hastaPersonalizado} onChange={setHastaPersonalizado} />
-        </View>
-      )}
+      <FiltroPeriodo
+        periodo={periodo}
+        onPeriodo={cambiarPeriodo}
+        desde={desdePersonalizado}
+        hasta={hastaPersonalizado}
+        onDesde={setDesdePersonalizado}
+        onHasta={setHastaPersonalizado}
+        conTodo
+      />
 
       <Segmentado
         opciones={[
@@ -223,14 +218,16 @@ export default function HistorialScreen() {
       {fechasValidas ? (
         <View style={styles.resumen}>
           <Text style={styles.rango}>
-            {desde === hasta
-              ? formatearFechaCorta(desde)
-              : `${formatearFechaCorta(desde)}  –  ${formatearFechaCorta(hasta)}`}
+            {desde === undefined
+              ? 'Todos los movimientos'
+              : desde === hasta
+                ? formatearFechaCorta(desde)
+                : `${formatearFechaCorta(desde)}  –  ${formatearFechaCorta(hasta)}`}
           </Text>
           <View style={styles.cifras}>
-            <Cifra texto="Ingresos" valor={resumen?.ingresos ?? 0} color={colores.ingreso} />
+            <Cifra texto="Ingresos" valor={resumen.ingresos} color={colores.ingreso} />
             <View style={styles.separador} />
-            <Cifra texto="Gastos" valor={resumen?.gastos ?? 0} color={colores.gasto} />
+            <Cifra texto="Gastos" valor={resumen.gastos} color={colores.gasto} />
             <View style={styles.separador} />
             <Cifra texto="Balance" valor={balance} color={balance < 0 ? colores.gasto : colores.ingreso} />
           </View>
@@ -239,56 +236,88 @@ export default function HistorialScreen() {
         <Text style={styles.error}>Revisa las fechas: usa AAAA-MM-DD y que «desde» no sea posterior a «hasta».</Text>
       )}
 
-      {fechasValidas && resumen?.evolucion && <GraficoEvolucion evolucion={resumen.evolucion} tipo={tipo} />}
+      {/* Hoy y Ayer son un solo día: no hay nada que agrupar. */}
+      {fechasValidas && evolucion && desde !== hasta && (
+        <View style={{ gap: 8 }}>
+          <Text style={styles.etiqueta}>Agrupar por</Text>
+          <Segmentado
+            opciones={agrupaciones}
+            valor={agrupacionElegida ?? evolucion.agrupacion}
+            onChange={setAgrupacion}
+          />
+        </View>
+      )}
+
+      {fechasValidas && evolucion && <GraficoEvolucion evolucion={evolucion} tipo={tipo} />}
 
       {error && <Text style={styles.error}>{error}</Text>}
 
       {fechasValidas && !cargando && total > 0 && (
         <Text style={styles.contador}>
           {total} {total === 1 ? 'movimiento' : 'movimientos'}
+          {agrupado && ' · toca un período para ver sus movimientos'}
         </Text>
       )}
     </View>
   );
 
+  const vacio = !fechasValidas ? undefined : cargando ? (
+    <ActivityIndicator style={{ marginTop: 32 }} color={colores.primario} />
+  ) : (
+    <View style={styles.vacio}>
+      <Ionicons name="search-outline" size={36} color={colores.textoSuave} />
+      <Text style={styles.vacioTexto}>No hay movimientos en este período.</Text>
+    </View>
+  );
+
+  // Deslizar hacia abajo: volver a pedir todo (lo único que fuerza una petición).
+  const recargarControl = (
+    <RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colores.primario} />
+  );
+
   return (
     <View style={styles.container}>
-      <SectionList
-        sections={fechasValidas && !cargando ? secciones : []}
-        keyExtractor={(m) => String(m.id)}
-        ListHeaderComponent={encabezado}
-        contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
-        stickySectionHeadersEnabled={false}
-        keyboardShouldPersistTaps="handled"
-        renderSectionHeader={({ section }) => <EncabezadoDia titulo={section.titulo} />}
-        renderItem={({ item }) => (
-          <FilaMovimiento
-            movimiento={item}
-            onPress={() =>
-              setSheet((s) => ({
-                abierto: true,
-                id: item.id,
-                clave: s.clave + 1,
-              }))
-            }
-          />
-        )}
-        onEndReached={cargarMas}
-        onEndReachedThreshold={0.4}
-        ListFooterComponent={
-          cargandoMas ? <ActivityIndicator color={colores.primario} style={{ marginTop: 12 }} /> : undefined
-        }
-        ListEmptyComponent={
-          !fechasValidas ? undefined : cargando ? (
-            <ActivityIndicator style={{ marginTop: 32 }} color={colores.primario} />
-          ) : (
-            <View style={styles.vacio}>
-              <Ionicons name="search-outline" size={36} color={colores.textoSuave} />
-              <Text style={styles.vacioTexto}>No hay movimientos en este período.</Text>
-            </View>
-          )
-        }
-      />
+      {agrupado ? (
+        <FlatList
+          data={fechasValidas && !cargando ? grupos : []}
+          keyExtractor={(g) => g.desde}
+          ListHeaderComponent={encabezado}
+          contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
+          keyboardShouldPersistTaps="handled"
+          renderItem={({ item }) => (
+            <FilaGrupo grupo={item} agrupacion={evolucion.agrupacion} tipo={tipo} onPress={() => verGrupo(item)} />
+          )}
+          ListHeaderComponentStyle={{ marginBottom: 12 }}
+          refreshControl={recargarControl}
+          ListEmptyComponent={vacio}
+        />
+      ) : (
+        <SectionList
+          sections={fechasValidas && !cargando ? secciones : []}
+          keyExtractor={(m) => String(m.id)}
+          ListHeaderComponent={encabezado}
+          contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
+          stickySectionHeadersEnabled={false}
+          keyboardShouldPersistTaps="handled"
+          renderSectionHeader={({ section }) => (
+            <EncabezadoDia titulo={section.titulo} ingresos={section.ingresos} gastos={section.gastos} />
+          )}
+          renderItem={({ item }) => (
+            <FilaMovimiento
+              movimiento={item}
+              onPress={() =>
+                setSheet((s) => ({
+                  abierto: true,
+                  id: item.id,
+                  clave: s.clave + 1,
+                }))
+              }
+            />
+          )}
+          refreshControl={recargarControl}
+          ListEmptyComponent={vacio}
+        />
+      )}
 
       <MovimientoSheet
         key={`movimiento-${sheet.clave}`}
@@ -317,28 +346,6 @@ function Cifra({ texto, valor, color }: { texto: string; valor: number; color: s
   );
 }
 
-function CampoFecha({ etiqueta, valor, onChange }: { etiqueta: string; valor: string; onChange: (v: string) => void }) {
-  const { colores } = useTema();
-  const styles = useEstilos(crearEstilos);
-
-  return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.campoEtiqueta}>{etiqueta}</Text>
-      <View style={[styles.campo, !esFechaValida(valor) && { borderColor: colores.gasto }]}>
-        <Ionicons name="calendar-outline" size={16} color={colores.textoSuave} />
-        <TextInput
-          style={styles.campoInput}
-          value={valor}
-          onChangeText={onChange}
-          placeholder="AAAA-MM-DD"
-          placeholderTextColor={colores.textoSuave}
-          maxLength={10}
-        />
-      </View>
-    </View>
-  );
-}
-
 const crearEstilos = (colores: Paleta) =>
   StyleSheet.create({
     container: { flex: 1, backgroundColor: colores.fondo },
@@ -356,47 +363,6 @@ const crearEstilos = (colores: Paleta) =>
       fontSize: 16,
       color: colores.texto,
       paddingVertical: 12,
-    },
-    periodos: { gap: 8, paddingRight: 8 },
-    periodo: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 5,
-      paddingHorizontal: 14,
-      paddingVertical: 9,
-      borderRadius: radio.sm,
-      backgroundColor: colores.tarjeta,
-      borderWidth: 1,
-      borderColor: colores.borde,
-    },
-    periodoActivo: {
-      backgroundColor: colores.primario,
-      borderColor: colores.primario,
-    },
-    periodoTexto: { color: colores.texto, fontWeight: '500' },
-    periodoTextoActivo: { color: '#fff', fontWeight: '700' },
-    personalizado: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-    campoEtiqueta: {
-      fontSize: 13,
-      fontWeight: '600',
-      color: colores.textoSuave,
-      marginBottom: 6,
-    },
-    campo: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colores.tarjeta,
-      borderRadius: radio.md,
-      borderWidth: 1,
-      borderColor: colores.borde,
-      paddingHorizontal: 12,
-    },
-    campoInput: {
-      flex: 1,
-      fontSize: 15,
-      color: colores.texto,
-      paddingVertical: 10,
     },
     resumen: {
       backgroundColor: colores.tarjeta,
@@ -417,6 +383,7 @@ const crearEstilos = (colores: Paleta) =>
     cifraValor: { fontSize: 16, fontWeight: '800' },
     separador: { width: 1, height: 32, backgroundColor: colores.borde },
     contador: { fontSize: 13, color: colores.textoSuave },
+    etiqueta: { fontSize: 13, fontWeight: '600', color: colores.textoSuave },
     error: { color: colores.gasto },
     vacio: { alignItems: 'center', gap: 10, marginTop: 40 },
     vacioTexto: { color: colores.textoSuave, fontSize: 15 },
