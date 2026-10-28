@@ -177,6 +177,9 @@ export const cuentaApi = {
   /** Borra todos los datos del tenant (requiere escribir BORRAR y la contraseña). */
   restablecer: (password: string, confirmacion: string) =>
     api.post<{ message: string }>('/cuenta/restablecer', { password, confirmacion }).then((r) => r.data),
+  /** Elimina la cuenta y todos sus datos (escribir ELIMINAR; la contraseña si la cuenta tiene). */
+  eliminar: (confirmacion: string, password: string | null) =>
+    api.delete('/cuenta', { data: { confirmacion, ...(password !== null && { password }) } }),
 };
 
 export const categoriasApi = {

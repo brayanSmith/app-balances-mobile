@@ -1,7 +1,7 @@
 import { isAxiosError } from 'axios';
 import { createContext, use, useEffect, useState, type PropsWithChildren } from 'react';
 
-import { authApi, setAuthToken } from '@/lib/api';
+import { authApi, cuentaApi, setAuthToken } from '@/lib/api';
 import { borrarCache, usarCacheDe } from '@/lib/offline';
 import { cerrarGoogle, iniciarConGoogle } from '@/lib/google';
 import { cancelarRecordatorios } from '@/lib/recordatorios';
@@ -23,6 +23,8 @@ interface AuthContextValue {
   restablecerPassword: (email: string, codigo: string, password: string) => Promise<void>;
   /** Tras editar el perfil: reemplaza el usuario en memoria y el guardado. */
   actualizarUsuario: (user: User) => Promise<void>;
+  /** Elimina la cuenta en la API y cierra la sesión en este teléfono. */
+  eliminarCuenta: (confirmacion: string, password: string | null) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -109,6 +111,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
     actualizarUsuario: async (actual) => {
       setUser(actual);
       await setItem(USER_KEY, JSON.stringify(actual));
+    },
+    eliminarCuenta: async (confirmacion, password) => {
+      await cuentaApi.eliminar(confirmacion, password);
+      await cerrarLocalmente();
     },
     signOut: async () => {
       try {

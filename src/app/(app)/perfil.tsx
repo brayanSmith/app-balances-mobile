@@ -17,15 +17,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/Avatar';
 import { Boton } from '@/components/Boton';
+import { EliminarCuentaSheet } from '@/components/EliminarCuentaSheet';
 import { useSession } from '@/context/auth';
 import { useEstilos, useTema } from '@/context/tema';
 import { mensajeDeError, perfilApi } from '@/lib/api';
 import { radio, type NombreIcono, type Paleta } from '@/lib/theme';
 
-/** "Mi perfil": foto, nombre, correo y contraseña. */
+/** "Mi perfil": foto, nombre, correo, contraseña y eliminar la cuenta. */
 export default function PerfilScreen() {
   const insets = useSafeAreaInsets();
+  const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
+  const [eliminando, setEliminando] = useState(false);
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'web' ? undefined : 'padding'}>
@@ -36,7 +39,18 @@ export default function PerfilScreen() {
         <Foto />
         <DatosPersonales />
         <CambiarPassword />
+
+        <Pressable
+          onPress={() => setEliminando(true)}
+          style={({ pressed }) => [styles.eliminar, pressed && { opacity: 0.7 }]}
+          accessibilityRole="button"
+        >
+          <Ionicons name="trash-outline" size={18} color={colores.gasto} />
+          <Text style={styles.eliminarTexto}>Eliminar cuenta</Text>
+        </Pressable>
       </ScrollView>
+
+      <EliminarCuentaSheet visible={eliminando} onClose={() => setEliminando(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -398,4 +412,15 @@ const crearEstilos = (colores: Paleta) =>
       padding: 10,
     },
     exitoTexto: { flex: 1, color: colores.texto, fontSize: 14 },
+    eliminar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: 14,
+      marginTop: 8,
+      borderRadius: radio.md,
+      backgroundColor: colores.gastoSuave,
+    },
+    eliminarTexto: { color: colores.gasto, fontSize: 16, fontWeight: '700' },
   });
