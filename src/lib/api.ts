@@ -5,6 +5,8 @@ import { invalidarCache } from './offline';
 
 import type {
   Adjunto,
+  AgrupacionAnalisis,
+  Analisis,
   ArchivoLocal,
   Categoria,
   CategoriaInput,
@@ -52,7 +54,7 @@ api.interceptors.response.use((respuesta) => {
   const ruta = respuesta.config.url ?? '';
   if (metodo !== 'get' && !SIN_CAMBIOS.includes(ruta)) {
     const todo = ruta.startsWith('/categorias') || ruta.startsWith('/cuenta');
-    invalidarCache(todo ? undefined : ['inicio:', 'historial:', 'recordatorios']);
+    invalidarCache(todo ? undefined : ['inicio:', 'historial:', 'analisis:', 'recordatorios']);
   }
   return respuesta;
 });
@@ -133,6 +135,12 @@ export const adjuntosApi = {
       .post<{ data: Adjunto }>(`/movimientos/${movimientoId}/adjuntos`, await formularioConArchivo(archivo), multipart)
       .then((r) => r.data.data),
   eliminar: (id: number) => api.delete(`/adjuntos/${id}`),
+};
+
+export const analisisApi = {
+  /** Saldo agrupado (área y velas) y, con `proyectar_hasta` (AAAA-MM), su proyección. */
+  obtener: (params: { desde: string; hasta: string; agrupacion: AgrupacionAnalisis; proyectar_hasta?: string }) =>
+    api.get<Analisis>('/analisis', { params }).then((r) => r.data),
 };
 
 /** "Mi perfil": todas devuelven el usuario actualizado (menos la contraseña). */

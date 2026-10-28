@@ -215,3 +215,42 @@ export interface Evolucion {
   /** `desde` = primer día del grupo. Los grupos sin movimientos vienen en 0. */
   puntos: { desde: string; ingresos: number; gastos: number }[];
 }
+
+export type AgrupacionAnalisis = 'semana' | 'quincena' | 'mes' | 'anio';
+
+/** Una semana, quincena, mes o año del análisis, con sus velas del saldo acumulado. */
+export interface PeriodoAnalisis {
+  desde: string;
+  hasta: string;
+  ingresos: number;
+  gastos: number;
+  /** Saldo al empezar, al terminar y el más alto y más bajo dentro del período. */
+  apertura: number;
+  cierre: number;
+  maximo: number;
+  minimo: number;
+  /** Estimado (después de hoy), no registrado. */
+  proyectado: boolean;
+}
+
+export interface Proyeccion {
+  hasta: string;
+  ingresos: number;
+  gastos: number;
+  saldo_final: number;
+  /** Vencimientos de los programados que caen hasta `hasta` (los vencidos cuentan mañana). */
+  programados: { ingresos: number; gastos: number; vencimientos: number };
+  /** Promedio diario de lo no programado en el período filtrado. */
+  promedio_diario: { ingresos: number; gastos: number };
+  dias_base: number;
+}
+
+export interface Analisis {
+  agrupacion: AgrupacionAnalisis;
+  saldo_inicial: number;
+  saldo_actual: number;
+  ingresos: number;
+  gastos: number;
+  periodos: PeriodoAnalisis[];
+  proyeccion: Proyeccion | null;
+}

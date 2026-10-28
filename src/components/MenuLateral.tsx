@@ -156,6 +156,7 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
         <View style={styles.opciones}>
           <Opcion icono="home-outline" texto="Inicio" onPress={onClose} />
           <Opcion icono="time-outline" texto="Historial" onPress={() => ir('/historial')} />
+          <Opcion icono="analytics-outline" texto="Análisis" onPress={() => ir('/analisis')} />
           <Opcion icono="pricetags-outline" texto="Categorías" onPress={() => ir('/categorias')} />
           <Opcion icono="cloud-upload-outline" texto="Importar CSV" onPress={() => ir('/importar')} />
           <Opcion icono="person-circle-outline" texto="Mi perfil" onPress={() => ir('/perfil')} />

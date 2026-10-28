@@ -6,6 +6,7 @@ import Svg, { Line } from 'react-native-svg';
 import { Segmentado } from '@/components/Segmentado';
 import { useEstilos, useTema } from '@/context/tema';
 import { formatearFechaCorta, formatearMonto } from '@/lib/format';
+import { escalaBonita, montoCorto } from '@/lib/graficos';
 import { radio, type Paleta } from '@/lib/theme';
 import type { Evolucion, TipoMovimiento } from '@/lib/types';
 
@@ -261,25 +262,6 @@ function etiquetaDetalle(fecha: string, agrupacion: Evolucion['agrupacion']) {
   if (agrupacion === 'mes') return `${MESES[mes - 1].charAt(0).toUpperCase()}${MESES[mes - 1].slice(1)} ${anio}`;
   if (agrupacion === 'semana') return `Semana del ${formatearFechaCorta(fecha)}`;
   return formatearFechaCorta(fecha);
-}
-
-/** 1.250.000 → "1,3 M"; 45.000 → "45 k". */
-function montoCorto(valor: number) {
-  const abs = Math.abs(valor);
-  const signo = valor < 0 ? '−' : '';
-  const corto = (n: number) => n.toLocaleString('es-CO', { maximumFractionDigits: 1 });
-  if (abs >= 1_000_000) return `${signo}${corto(abs / 1_000_000)} M`;
-  if (abs >= 1_000) return `${signo}${corto(abs / 1_000)} k`;
-  return `${signo}${corto(abs)}`;
-}
-
-/** Límites y paso "redondos" del eje Y (0, 500 k, 1 M…), siempre incluyendo el 0. */
-function escalaBonita(min: number, max: number) {
-  if (min === max) max = min + 1;
-  const pasoCrudo = (max - min) / 3;
-  const potencia = 10 ** Math.floor(Math.log10(pasoCrudo));
-  const paso = ([1, 2, 2.5, 5, 10].find((f) => f * potencia >= pasoCrudo) ?? 10) * potencia;
-  return { min: Math.floor(min / paso) * paso, max: Math.max(paso, Math.ceil(max / paso) * paso), paso };
 }
 
 const crearEstilos = (colores: Paleta) =>

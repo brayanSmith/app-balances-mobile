@@ -24,6 +24,7 @@ export default function AppLayout() {
             {/* El inicio tiene su propio encabezado (saludo y accesos). */}
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="historial" options={{ title: 'Historial' }} />
+            <Stack.Screen name="analisis" options={{ title: 'Análisis' }} />
             <Stack.Screen name="categorias" options={{ title: 'Categorías' }} />
             <Stack.Screen name="importar" options={{ title: 'Importar CSV' }} />
             <Stack.Screen name="perfil" options={{ title: 'Mi perfil' }} />
