@@ -7,11 +7,11 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://CAMBIAR-POR-TU-DOMINIO/api" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api" }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "EXPO_PUBLIC_API_URL": "https://CAMBIAR-POR-TU-DOMINIO/api" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api" }
     }
   },
   "submit": {
