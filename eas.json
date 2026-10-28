@@ -11,14 +11,14 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-v9nmgi95e9ftmgj23v0an8t1llrashjq.apps.googleusercontent.com"
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-m50chb0lhmdkr598e1r8cj7pq3gj07ke.apps.googleusercontent.com"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-v9nmgi95e9ftmgj23v0an8t1llrashjq.apps.googleusercontent.com"
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-m50chb0lhmdkr598e1r8cj7pq3gj07ke.apps.googleusercontent.com"
       }
     }
   },
