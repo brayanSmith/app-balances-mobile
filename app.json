@@ -18,7 +18,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -31,7 +32,8 @@
         "expo-image-picker",
         {
           "cameraPermission": "Balances usa la cámara para fotografiar facturas y comprobantes.",
-          "photosPermission": "Balances accede a tus fotos para adjuntar comprobantes."
+          "photosPermission": "Balances accede a tus fotos para adjuntar comprobantes.",
+          "microphonePermission": false
         }
       ],
       "expo-sharing",
@@ -46,6 +48,12 @@
     "scheme": "balances",
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0c14aa9c-f953-4244-bf5b-0fe1d8688a87"
+      }
+    },
+    "owner": "brayansmith"
   }
 }
