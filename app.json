@@ -56,6 +56,12 @@
         "projectId": "0c14aa9c-f953-4244-bf5b-0fe1d8688a87"
       }
     },
-    "owner": "brayansmith"
+    "owner": "brayansmith",
+    "updates": {
+      "url": "https://u.expo.dev/0c14aa9c-f953-4244-bf5b-0fe1d8688a87"
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    }
   }
 }

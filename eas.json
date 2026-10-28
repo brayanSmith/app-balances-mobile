@@ -1,25 +1,30 @@
 {
   "cli": {
-    "version": ">= 12.0.0",
+    "version": ">= 16.0.0",
     "appVersionSource": "remote"
   },
   "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "environment": "development",
+      "channel": "development"
+    },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-m50chb0lhmdkr598e1r8cj7pq3gj07ke.apps.googleusercontent.com"
-      }
+      "environment": "preview",
+      "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://app-balances-api-production-n7widq.laravel.cloud/api",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "1098459003410-m50chb0lhmdkr598e1r8cj7pq3gj07ke.apps.googleusercontent.com"
-      }
+      "environment": "production",
+      "channel": "production"
     }
   },
   "submit": {
