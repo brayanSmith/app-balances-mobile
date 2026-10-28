@@ -31,7 +31,15 @@ export const api = create({
 });
 
 // Peticiones que escriben pero no cambian movimientos ni categorías.
-const SIN_CAMBIOS = ['/login', '/register', '/logout', '/importaciones/previsualizar', '/importaciones/comprimidos'];
+const SIN_CAMBIOS = [
+  '/login',
+  '/register',
+  '/logout',
+  '/password/codigo',
+  '/password/restablecer',
+  '/importaciones/previsualizar',
+  '/importaciones/comprimidos',
+];
 
 // Cuando se crea, edita o borra algo, lo que está en caché ya no sirve: se vuelve
 // a pedir la próxima vez. Una categoría o el restablecer afectan a todo; lo demás
@@ -75,6 +83,12 @@ export const authApi = {
   register: (name: string, email: string, password: string) =>
     api.post<AuthResponse>('/register', { name, email, password }).then((r) => r.data),
   logout: () => api.post('/logout'),
+  /** "¿Olvidaste tu contraseña?": envía un código de 6 dígitos al correo. */
+  pedirCodigo: (email: string) =>
+    // Más tiempo que el resto: el servidor de desarrollo puede tardar en enviar el correo.
+    api.post<{ message: string }>('/password/codigo', { email }, { timeout: 30000 }).then((r) => r.data),
+  restablecerPassword: (email: string, codigo: string, password: string) =>
+    api.post<AuthResponse>('/password/restablecer', { email, codigo, password }).then((r) => r.data),
   user: () => api.get<User>('/user').then((r) => r.data),
 };
 

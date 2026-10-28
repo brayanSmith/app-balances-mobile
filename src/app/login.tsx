@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Boton } from '@/components/Boton';
+import { RecuperarSheet } from '@/components/RecuperarSheet';
 import { useSession } from '@/context/auth';
 import { mensajeDeError } from '@/lib/api';
 import { useEstilos, useTema } from '@/context/tema';
@@ -32,6 +33,7 @@ export default function LoginScreen() {
   const [verPassword, setVerPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [recuperando, setRecuperando] = useState(false);
 
   const esRegistro = modo === 'registro';
 
@@ -95,6 +97,12 @@ export default function LoginScreen() {
               }
             />
 
+            {!esRegistro && (
+              <Pressable onPress={() => setRecuperando(true)} hitSlop={8} style={styles.olvido}>
+                <Text style={styles.linkFuerte}>¿Olvidaste tu contraseña?</Text>
+              </Pressable>
+            )}
+
             {error && <Text style={styles.error}>{error}</Text>}
 
             <Boton texto={esRegistro ? 'Registrarme' : 'Entrar'} onPress={enviar} cargando={enviando} />
@@ -113,6 +121,8 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <RecuperarSheet visible={recuperando} onClose={() => setRecuperando(false)} emailInicial={email.trim()} />
     </LinearGradient>
   );
 }
@@ -182,6 +192,7 @@ const crearEstilos = (colores: Paleta) =>
       paddingHorizontal: 14,
     },
     campoInput: { flex: 1, fontSize: 16, color: colores.texto, paddingVertical: 14 },
+    olvido: { alignSelf: 'flex-end', marginTop: -4 },
     error: { color: colores.gasto, fontSize: 14 },
     link: { color: colores.textoSuave, textAlign: 'center', marginTop: 4 },
     linkFuerte: { color: colores.primario, fontWeight: '700' },

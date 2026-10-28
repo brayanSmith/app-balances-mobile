@@ -16,6 +16,8 @@ interface AuthContextValue {
   isLoading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<void>;
+  /** Con el código que llegó al correo: cambia la contraseña e inicia sesión. */
+  restablecerPassword: (email: string, codigo: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -91,6 +93,8 @@ export function SessionProvider({ children }: PropsWithChildren) {
     isLoading,
     signIn: async (email, password) => guardarSesion(await authApi.login(email, password)),
     signUp: async (name, email, password) => guardarSesion(await authApi.register(name, email, password)),
+    restablecerPassword: async (email, codigo, password) =>
+      guardarSesion(await authApi.restablecerPassword(email, codigo, password)),
     signOut: async () => {
       try {
         await authApi.logout();
