@@ -6,6 +6,8 @@ export interface User {
   id: number;
   name: string;
   email: string;
+  /** Enlace firmado a la foto de perfil (dura una semana), o null. */
+  foto_url: string | null;
 }
 
 export interface Categoria {

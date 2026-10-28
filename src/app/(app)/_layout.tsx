@@ -26,6 +26,7 @@ export default function AppLayout() {
             <Stack.Screen name="historial" options={{ title: 'Historial' }} />
             <Stack.Screen name="categorias" options={{ title: 'Categorías' }} />
             <Stack.Screen name="importar" options={{ title: 'Importar CSV' }} />
+            <Stack.Screen name="perfil" options={{ title: 'Mi perfil' }} />
           </Stack>
         </RecordatoriosProvider>
       </CategoriasProvider>

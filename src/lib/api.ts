@@ -37,6 +37,9 @@ const SIN_CAMBIOS = [
   '/logout',
   '/password/codigo',
   '/password/restablecer',
+  '/perfil',
+  '/perfil/password',
+  '/perfil/foto',
   '/importaciones/previsualizar',
   '/importaciones/comprimidos',
 ];
@@ -130,6 +133,18 @@ export const adjuntosApi = {
       .post<{ data: Adjunto }>(`/movimientos/${movimientoId}/adjuntos`, await formularioConArchivo(archivo), multipart)
       .then((r) => r.data.data),
   eliminar: (id: number) => api.delete(`/adjuntos/${id}`),
+};
+
+/** "Mi perfil": todas devuelven el usuario actualizado (menos la contraseña). */
+export const perfilApi = {
+  /** Cambiar el correo pide la contraseña actual. */
+  actualizar: (datos: { name: string; email: string; password_actual?: string }) =>
+    api.put<User>('/perfil', datos).then((r) => r.data),
+  cambiarPassword: (password_actual: string, password: string, password_confirmation: string) =>
+    api.put<{ message: string }>('/perfil/password', { password_actual, password, password_confirmation }),
+  subirFoto: async (foto: ArchivoLocal) =>
+    api.post<User>('/perfil/foto', await formularioConArchivo(foto, {}, 'foto'), multipart).then((r) => r.data),
+  quitarFoto: () => api.delete<User>('/perfil/foto').then((r) => r.data),
 };
 
 export const programacionesApi = {

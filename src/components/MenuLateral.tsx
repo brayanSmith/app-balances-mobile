@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Avatar } from '@/components/Avatar';
 import { useSession } from '@/context/auth';
 import { useRecordatorios } from '@/context/recordatorios';
 import { useSincronizacion } from '@/context/sincronizacion';
@@ -119,8 +120,6 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
     router.push(ruta);
   };
 
-  const inicial = user?.name.trim().charAt(0).toUpperCase() ?? '?';
-
   return (
     <Modal visible={montado} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <Animated.View style={[StyleSheet.absoluteFill, styles.fondo, { opacity: progreso }]}>
@@ -137,15 +136,21 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
           end={{ x: 1, y: 1 }}
           style={[styles.perfil, { paddingTop: insets.top + 24 }]}
         >
-          <View style={styles.avatar}>
-            <Text style={styles.avatarTexto}>{inicial}</Text>
-          </View>
-          <Text style={styles.nombre} numberOfLines={1}>
-            {user?.name}
-          </Text>
-          <Text style={styles.correo} numberOfLines={1}>
-            {user?.email}
-          </Text>
+          <Pressable onPress={() => ir('/perfil')} accessibilityLabel="Ver mi perfil">
+            <Avatar
+              user={user}
+              tamano={58}
+              fondo="rgba(255,255,255,0.25)"
+              colorTexto="#fff"
+              style={styles.avatar}
+            />
+            <Text style={styles.nombre} numberOfLines={1}>
+              {user?.name}
+            </Text>
+            <Text style={styles.correo} numberOfLines={1}>
+              {user?.email}
+            </Text>
+          </Pressable>
         </LinearGradient>
 
         <View style={styles.opciones}>
@@ -153,6 +158,7 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
           <Opcion icono="time-outline" texto="Historial" onPress={() => ir('/historial')} />
           <Opcion icono="pricetags-outline" texto="Categorías" onPress={() => ir('/categorias')} />
           <Opcion icono="cloud-upload-outline" texto="Importar CSV" onPress={() => ir('/importar')} />
+          <Opcion icono="person-circle-outline" texto="Mi perfil" onPress={() => ir('/perfil')} />
 
           <View style={styles.separador} />
 
@@ -255,16 +261,7 @@ const crearEstilos = (colores: Paleta) =>
       boxShadow: '8px 0px 30px rgba(0, 0, 0, 0.2)',
     },
     perfil: { paddingHorizontal: 22, paddingBottom: 22 },
-    avatar: {
-      width: 58,
-      height: 58,
-      borderRadius: 29,
-      backgroundColor: 'rgba(255,255,255,0.25)',
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: 12,
-    },
-    avatarTexto: { color: '#fff', fontSize: 26, fontWeight: '800' },
+    avatar: { marginBottom: 12, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)' },
     nombre: { color: '#fff', fontSize: 18, fontWeight: '700' },
     correo: { color: 'rgba(255,255,255,0.85)', fontSize: 13, marginTop: 2 },
     opciones: { flex: 1, paddingHorizontal: 12, paddingTop: 16, gap: 4 },
