@@ -47,7 +47,7 @@ export default function HomeScreen() {
   const styles = useEstilos(crearEstilos);
   const { user } = useSession();
   const { recargar: recargarCategorias } = useCategorias();
-  const { cola, version, descartar, reintentar, vaciar } = useSincronizacion();
+  const { cola, enLinea, version, descartar, reintentar, vaciar } = useSincronizacion();
   const [mes, setMes] = useState(() => new Date());
   const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
   const [resumen, setResumen] = useState<Resumen | null>(null);
@@ -130,10 +130,10 @@ export default function HomeScreen() {
           adjuntos_count: e.archivos.length,
           programado: e.operacion.tipo === 'pago',
           programacion: null,
-          local: { error: e.error },
+          local: { error: e.error, enviando: enLinea && !e.error },
         },
       ]);
-  }, [cola, mes]);
+  }, [cola, mes, enLinea]);
 
   const secciones = useMemo(() => {
     const todos = [...locales.map(([, , m]) => m), ...movimientos];
@@ -162,7 +162,8 @@ export default function HomeScreen() {
   /** Tocar un movimiento que aún no se envía: ver el motivo del error, reintentar o descartarlo. */
   function accionLocal(id: number) {
     const elemento = locales.find(([idLocal]) => idLocal === id)?.[1];
-    if (!elemento) return;
+    // Se está enviando en este momento: descartarlo podría chocar con el envío.
+    if (!elemento || (enLinea && !elemento.error)) return;
     const mensaje = elemento.error
       ? `No se pudo enviar: ${elemento.error}`
       : 'Todavía no se envía: se enviará solo cuando haya conexión.';

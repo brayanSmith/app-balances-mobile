@@ -47,10 +47,17 @@ export const nuevoClienteId = () => Crypto.randomUUID();
 type Resultado = 'ok' | 'sin-red' | 'error';
 type Cambio = (cola: EnCola[]) => EnCola[];
 
-/** Envía un elemento: crea el movimiento o pago (si falta) y sube sus comprobantes. */
-async function enviar(elemento: EnCola, actualizar: (cambio: Cambio) => Promise<void>): Promise<Resultado> {
-  const cambiar = (cambios: Partial<EnCola>) =>
-    actualizar((cola) => cola.map((e) => (e.id === elemento.id ? { ...e, ...cambios } : e)));
+/**
+ * Envía un elemento: crea el movimiento o pago (si falta) y sube sus comprobantes
+ * a la vez. `alCrear` avisa apenas existe en la API, para que las pantallas lo muestren.
+ */
+async function enviar(
+  elemento: EnCola,
+  actualizar: (cambio: Cambio) => Promise<void>,
+  alCrear: () => void,
+): Promise<Resultado> {
+  const cambiar = (cambio: (e: EnCola) => Partial<EnCola>) =>
+    actualizar((cola) => cola.map((e) => (e.id === elemento.id ? { ...e, ...cambio(e) } : e)));
 
   try {
     let movimientoId = elemento.movimientoId;
@@ -60,17 +67,21 @@ async function enviar(elemento: EnCola, actualizar: (cambio: Cambio) => Promise<
         operacion.tipo === 'movimiento'
           ? await movimientosApi.crear({ ...operacion.datos, cliente_id: elemento.id })
           : await programacionesApi.pagar(operacion.programacionId, { ...operacion.datos, cliente_id: elemento.id });
-      movimientoId = movimiento.id;
-      await cambiar({ movimientoId });
+      const id = movimiento.id;
+      movimientoId = id;
+      await cambiar(() => ({ movimientoId: id }));
+      alCrear();
     }
 
-    let pendientes = elemento.archivos;
-    for (const archivo of elemento.archivos) {
-      await adjuntosApi.subir(movimientoId, archivo);
-      borrarArchivo(archivo);
-      pendientes = pendientes.filter((a) => a !== archivo);
-      await cambiar({ archivos: pendientes });
-    }
+    // Cada comprobante sale de la cola apenas sube (si uno falla, los demás no se repiten).
+    const id = movimientoId;
+    await Promise.all(
+      elemento.archivos.map(async (archivo) => {
+        await adjuntosApi.subir(id, archivo);
+        borrarArchivo(archivo);
+        await cambiar((e) => ({ archivos: e.archivos.filter((a) => a.uri !== archivo.uri) }));
+      }),
+    );
 
     await actualizar((cola) => cola.filter((e) => e.id !== elemento.id));
     return 'ok';
@@ -78,11 +89,11 @@ async function enviar(elemento: EnCola, actualizar: (cambio: Cambio) => Promise<
     // Sin red (o sesión vencida): se reintenta todo más tarde.
     if (esErrorDeRed(error) || (isAxiosError(error) && error.response?.status === 401)) return 'sin-red';
 
-    await cambiar({
+    await cambiar(() => ({
       error: isAxiosError(error)
         ? mensajeDeError(error)
         : 'No se pudo leer un comprobante guardado. Descártalo o vuelve a registrarlo.',
-    });
+    }));
     return 'error';
   }
 }
@@ -108,17 +119,25 @@ export function SincronizacionProvider({ children }: PropsWithChildren) {
     ocupado.current = true;
     setSincronizando(true);
     let enviados = 0;
+    const intentados = new Set<string>();
+    const recargar = () => setVersion((v) => v + 1);
     try {
-      // En orden; si se cae la red, se detiene y espera la próxima conexión.
-      for (const elemento of colaRef.current.filter((e) => !e.error)) {
-        const resultado = await enviar(elemento, actualizar);
+      // En orden; la cola se vuelve a leer tras cada envío, así que lo que se
+      // registre mientras tanto sale en esta misma vuelta. Si se cae la red, se
+      // detiene y espera la próxima conexión.
+      for (;;) {
+        const siguiente = colaRef.current.find((e) => !e.error && !intentados.has(e.id));
+        if (!siguiente) break;
+        intentados.add(siguiente.id);
+        const resultado = await enviar(siguiente, actualizar, recargar);
         if (resultado === 'sin-red') break;
         if (resultado === 'ok') enviados++;
       }
     } finally {
       ocupado.current = false;
       setSincronizando(false);
-      if (enviados > 0) setVersion((v) => v + 1);
+      // Ya con los comprobantes: que se vea su cantidad.
+      if (enviados > 0) recargar();
     }
   }, [actualizar]);
 
@@ -164,8 +183,10 @@ export function SincronizacionProvider({ children }: PropsWithChildren) {
         ...actual,
         { id, operacion, archivos: copias, movimientoId: null, creado: Date.now(), error: null, vista },
       ]);
+      // Con internet se envía ya, en segundo plano (quien encola no espera).
+      void sincronizar();
     },
-    [actualizar],
+    [actualizar, sincronizar],
   );
 
   const reintentar = useCallback(

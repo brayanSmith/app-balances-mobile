@@ -9,7 +9,7 @@ import { CategoriaIcono } from '@/components/CategoriaIcono';
 import { textoVencimiento } from '@/components/PagosPendientes';
 import { nuevoClienteId, useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { adjuntosApi, mensajeDeError, programacionesApi } from '@/lib/api';
+import { mensajeDeError, programacionesApi } from '@/lib/api';
 import { ayer, formatearFecha, formatearMonto, hoy } from '@/lib/format';
 import { esErrorDeRed, hayConexion } from '@/lib/offline';
 import { conAlpha, radio, type Paleta } from '@/lib/theme';
@@ -42,8 +42,6 @@ export function PagarSheet({ pendiente, visible, onClose, onListo }: Props) {
   const [usarParaProximos, setUsarParaProximos] = useState(false);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Si falla la subida de un comprobante, reintentar no vuelve a registrar el pago.
-  const [movimientoId, setMovimientoId] = useState<number | null>(null);
 
   const montoNumerico = Number(monto.replace(',', '.'));
   const cambioElMonto = montoNumerico > 0 && montoNumerico !== pendiente.monto;
@@ -51,51 +49,27 @@ export function PagarSheet({ pendiente, visible, onClose, onListo }: Props) {
   async function confirmar() {
     setError(null);
     setGuardando(true);
-    const pago = { monto: montoNumerico, fecha, actualizar_base: cambioElMonto && usarParaProximos };
-    let porSubir = archivos;
+    const pago: PagoInput = { monto: montoNumerico, fecha, actualizar_base: cambioElMonto && usarParaProximos };
     try {
-      // Sin conexión, el pago queda en el dispositivo y se envía después.
-      if (!hayConexion()) {
-        await pagarSinConexion(pago, porSubir);
-        return;
-      }
-
-      let id = movimientoId;
-      if (id === null) {
-        const movimiento = await programacionesApi.pagar(pendiente.id, { ...pago, cliente_id: clienteId });
-        id = movimiento.id;
-        setMovimientoId(id);
-      }
-      for (const archivo of archivos) {
-        await adjuntosApi.subir(id, archivo);
-        porSubir = porSubir.filter((a) => a !== archivo);
-        setArchivos(porSubir);
-      }
-      onListo(esIngreso ? `Ingreso de ${pendiente.descripcion} registrado.` : `Pago de ${pendiente.descripcion} registrado.`);
-    } catch (e) {
-      // Se cayó la señal: queda en cola con el mismo cliente_id (la API no lo registra dos veces).
-      if (esErrorDeRed(e)) {
-        await pagarSinConexion(pago, porSubir);
-        return;
-      }
-      setError(
-        movimientoId !== null
-          ? `El pago quedó registrado, pero falló la subida del comprobante: ${mensajeDeError(e)}`
-          : mensajeDeError(e),
+      // Queda en la cola y la hoja se cierra al instante: se envía en segundo plano
+      // (enseguida, o cuando vuelva internet) con su cliente_id, sin registrarlo dos veces.
+      await encolar(clienteId, { tipo: 'pago', programacionId: pendiente.id, datos: pago }, archivos, {
+        tipo: pendiente.tipo,
+        monto: pago.monto,
+        descripcion: pendiente.descripcion,
+        fecha: pago.fecha,
+        categoria: pendiente.categoria,
+      });
+      const que = esIngreso ? 'Ingreso' : 'Pago';
+      onListo(
+        hayConexion()
+          ? `${que} de ${pendiente.descripcion} registrado.`
+          : `${que} de ${pendiente.descripcion} guardado sin conexión: se enviará solo cuando vuelva internet.`,
       );
+    } catch {
+      setError('No se pudo guardar en el teléfono. Inténtalo de nuevo.');
       setGuardando(false);
     }
-  }
-
-  async function pagarSinConexion(pago: PagoInput, porSubir: ArchivoLocal[]) {
-    await encolar(clienteId, { tipo: 'pago', programacionId: pendiente.id, datos: pago }, porSubir, {
-      tipo: pendiente.tipo,
-      monto: pago.monto,
-      descripcion: pendiente.descripcion,
-      fecha: pago.fecha,
-      categoria: pendiente.categoria,
-    });
-    onListo(`Pago de ${pendiente.descripcion} guardado sin conexión: se enviará solo cuando vuelva internet.`);
   }
 
   async function omitir() {
@@ -138,12 +112,10 @@ export function PagarSheet({ pendiente, visible, onClose, onListo }: Props) {
             deshabilitado={!(montoNumerico > 0)}
             color={colorTipo}
           />
-          {movimientoId === null && (
-            <Pressable onPress={confirmarOmitir} style={styles.omitir}>
-              <Ionicons name="play-skip-forward-outline" size={16} color={colores.textoSuave} />
-              <Text style={styles.omitirTexto}>Omitir este periodo</Text>
-            </Pressable>
-          )}
+          <Pressable onPress={confirmarOmitir} style={styles.omitir}>
+            <Ionicons name="play-skip-forward-outline" size={16} color={colores.textoSuave} />
+            <Text style={styles.omitirTexto}>Omitir este periodo</Text>
+          </Pressable>
         </>
       }
     >

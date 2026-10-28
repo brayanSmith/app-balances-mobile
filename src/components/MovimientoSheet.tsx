@@ -23,6 +23,7 @@ import { useCategorias } from '@/context/categorias';
 import { nuevoClienteId, useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
 import { adjuntosApi, mensajeDeError, movimientosApi } from '@/lib/api';
+import { reducirImagen } from '@/lib/imagenes';
 import { ayer, esFechaValida, formatearFecha, formatearMonto, hoy, proximaFecha } from '@/lib/format';
 import { esErrorDeRed, hayConexion } from '@/lib/offline';
 import { conAlpha, type Paleta, radio } from '@/lib/theme';
@@ -76,8 +77,6 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
   const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
   const [adjuntosAEliminar, setAdjuntosAEliminar] = useState<Adjunto[]>([]);
   const [archivosNuevos, setArchivosNuevos] = useState<ArchivoLocal[]>([]);
-  // Id con el que se guardó: si una subida falla, reintentar no crea otro movimiento.
-  const [idGuardado, setIdGuardado] = useState(id);
 
   const [creandoCategoria, setCreandoCategoria] = useState(false);
   const [cargando, setCargando] = useState(editando);
@@ -147,38 +146,29 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
       }),
       ...(programacion && !programacion.es_base && { actualizar_programado: aplicarASiguientes }),
     };
-    const esNuevo = idGuardado === null;
-    let porSubir = archivosNuevos;
     try {
-      // Sin conexión, lo nuevo se guarda en el dispositivo y se envía después.
-      if (esNuevo && !hayConexion()) {
-        await guardarSinConexion(input, porSubir);
+      // Lo nuevo va a la cola y la hoja se cierra al instante: se envía en segundo
+      // plano (enseguida, o cuando vuelva internet).
+      if (id === null) {
+        await encolarNuevo(input);
         return;
       }
 
-      const movimientoId = esNuevo
-        ? (await movimientosApi.crear({ ...input, cliente_id: clienteId })).id
-        : (await movimientosApi.actualizar(idGuardado, input)).id;
-      setIdGuardado(movimientoId);
+      const movimientoId = (await movimientosApi.actualizar(id, input)).id;
 
-      // Uno por uno, sacando de la lista lo que ya se procesó por si algo falla a mitad.
-      for (const adjunto of adjuntosAEliminar) {
-        await adjuntosApi.eliminar(adjunto.id);
-        setAdjuntosAEliminar((lista) => lista.filter((a) => a !== adjunto));
-      }
-      for (const archivo of archivosNuevos) {
-        await adjuntosApi.subir(movimientoId, archivo);
-        porSubir = porSubir.filter((a) => a !== archivo);
-        setArchivosNuevos(porSubir);
-      }
+      // A la vez, sacando de la lista lo que ya se procesó por si algo falla a mitad.
+      await Promise.all([
+        ...adjuntosAEliminar.map(async (adjunto) => {
+          await adjuntosApi.eliminar(adjunto.id);
+          setAdjuntosAEliminar((lista) => lista.filter((a) => a !== adjunto));
+        }),
+        ...archivosNuevos.map(async (archivo) => {
+          await adjuntosApi.subir(movimientoId, await reducirImagen(archivo));
+          setArchivosNuevos((lista) => lista.filter((a) => a !== archivo));
+        }),
+      ]);
       onGuardado();
     } catch (e) {
-      // Se cayó la señal a mitad: lo nuevo queda en cola. Con el mismo cliente_id,
-      // si el movimiento sí alcanzó a crearse, la API no lo duplica.
-      if (esNuevo && esErrorDeRed(e)) {
-        await guardarSinConexion(input, porSubir);
-        return;
-      }
       setError(
         esErrorDeRed(e) ? 'Sin conexión: para editar un movimiento ya guardado necesitas internet.' : mensajeDeError(e),
       );
@@ -186,15 +176,15 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
     }
   }
 
-  async function guardarSinConexion(input: MovimientoInput, archivos: ArchivoLocal[]) {
-    await encolar(clienteId, { tipo: 'movimiento', datos: input }, archivos, {
+  async function encolarNuevo(input: MovimientoInput) {
+    await encolar(clienteId, { tipo: 'movimiento', datos: input }, archivosNuevos, {
       tipo,
       monto: montoNumerico,
       descripcion: input.descripcion,
       fecha,
       categoria: categorias.find((c) => c.id === categoriaId) ?? null,
     });
-    onGuardado('Guardado sin conexión: se enviará solo cuando vuelva internet.');
+    onGuardado(hayConexion() ? undefined : 'Guardado sin conexión: se enviará solo cuando vuelva internet.');
   }
 
   async function eliminar() {

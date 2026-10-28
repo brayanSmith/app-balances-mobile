@@ -62,8 +62,12 @@ export interface Movimiento {
   adjuntos_count: number;
   programado: boolean;
   programacion: Programacion | null;
-  /** Solo en la app: creado sin conexión y aún no enviado a la API. */
-  local?: { error: string | null };
+  /** Solo en la app: registrado y todavía en la cola (aún no está en la API). */
+  local?: {
+    error: string | null;
+    /** Con internet se está enviando ahora; sin ella, espera la conexión. */
+    enviando?: boolean;
+  };
 }
 
 /** Filtros del listado y del resumen (ver MovimientoController::filtrados). */

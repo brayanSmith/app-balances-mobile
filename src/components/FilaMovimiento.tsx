@@ -116,12 +116,12 @@ export function FilaMovimiento({ movimiento, onPress }: { movimiento: Movimiento
           {movimiento.local && (
             <View style={[styles.etiqueta, movimiento.local.error ? styles.etiquetaError : styles.etiquetaLocal]}>
               <Ionicons
-                name={movimiento.local.error ? 'alert-circle' : 'cloud-upload-outline'}
+                name={movimiento.local.error ? 'alert-circle' : movimiento.local.enviando ? 'sync' : 'cloud-upload-outline'}
                 size={12}
                 color={movimiento.local.error ? colores.gasto : colores.aviso}
               />
               <Text style={[styles.etiquetaTexto, { color: movimiento.local.error ? colores.gasto : colores.aviso }]}>
-                {movimiento.local.error ? 'No se envió' : 'Sin enviar'}
+                {movimiento.local.error ? 'No se envió' : movimiento.local.enviando ? 'Enviando…' : 'Sin enviar'}
               </Text>
             </View>
           )}
