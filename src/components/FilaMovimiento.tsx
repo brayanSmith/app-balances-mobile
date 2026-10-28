@@ -47,11 +47,13 @@ interface FilaGrupoProps {
   agrupacion: Evolucion['agrupacion'];
   /** Filtro de tipo del historial: con uno solo se muestra solo ese total. */
   tipo: 'todos' | Movimiento['tipo'];
+  /** Sus movimientos se están mostrando debajo. */
+  desplegado: boolean;
   onPress: () => void;
 }
 
-/** Fila con los totales de un grupo; tocarla abre ese período con sus movimientos. */
-export function FilaGrupo({ grupo, agrupacion, tipo, onPress }: FilaGrupoProps) {
+/** Fila con los totales de un grupo; tocarla despliega (o cierra) sus movimientos debajo. */
+export function FilaGrupo({ grupo, agrupacion, tipo, desplegado, onPress }: FilaGrupoProps) {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
   const balance = grupo.ingresos - grupo.gastos;
@@ -59,7 +61,12 @@ export function FilaGrupo({ grupo, agrupacion, tipo, onPress }: FilaGrupoProps) 
   const principal = tipo === 'ingreso' ? grupo.ingresos : tipo === 'gasto' ? -grupo.gastos : balance;
 
   return (
-    <Pressable style={({ pressed }) => [styles.fila, pressed && { opacity: 0.7 }]} onPress={onPress}>
+    <Pressable
+      style={({ pressed }) => [styles.fila, pressed && { opacity: 0.7 }]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: desplegado }}
+    >
       <View style={styles.grupoIcono}>
         <Ionicons name="calendar-outline" size={20} color={colores.primario} />
       </View>
@@ -78,7 +85,7 @@ export function FilaGrupo({ grupo, agrupacion, tipo, onPress }: FilaGrupoProps) 
         {principal < 0 ? '−' : '+'}
         {formatearMonto(Math.abs(principal))}
       </Text>
-      <Ionicons name="chevron-forward" size={18} color={colores.textoSuave} />
+      <Ionicons name={desplegado ? 'chevron-up' : 'chevron-down'} size={18} color={colores.textoSuave} />
     </Pressable>
   );
 }

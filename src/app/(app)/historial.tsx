@@ -15,6 +15,7 @@ import {
 
 import { EstadoConexion } from '@/components/EstadoConexion';
 import {
+  agruparPorDia,
   agruparPorDiaConTotales,
   EncabezadoDia,
   FilaGrupo,
@@ -164,13 +165,24 @@ export default function HistorialScreen() {
       .reverse(); // el más reciente primero, como los movimientos
   }, [evolucion, hasta]);
 
-  // Tocar un grupo abre ese período con sus movimientos.
-  function verGrupo(grupo: Grupo) {
-    setPeriodo('personalizado');
-    setDesdePersonalizado(grupo.desde);
-    setHastaPersonalizado(grupo.hasta);
-    setAgrupacion(null);
+  // Tocar un grupo despliega solo ese (con sus movimientos por día) debajo de su fila; otra vez, lo cierra.
+  const [desplegados, setDesplegados] = useState<Set<string>>(() => new Set());
+  function alternarGrupo(grupo: Grupo) {
+    setDesplegados((actual) => {
+      const nuevo = new Set(actual);
+      if (!nuevo.delete(grupo.desde)) nuevo.add(grupo.desde);
+      return nuevo;
+    });
   }
+  // Con otra agrupación (u otro período) los grupos son distintos: empiezan cerrados.
+  const claveGrupos = `${evolucion?.agrupacion}:${desde}:${hasta}`;
+  const [claveDesplegados, setClaveDesplegados] = useState(claveGrupos);
+  if (claveGrupos !== claveDesplegados) {
+    setClaveDesplegados(claveGrupos);
+    setDesplegados(new Set());
+  }
+
+  const abrirMovimiento = (id: number) => setSheet((s) => ({ abierto: true, id, clave: s.clave + 1 }));
   const balance = resumen.balance;
   const cerrarSheet = () => setSheet((s) => ({ ...s, abierto: false }));
 
@@ -255,7 +267,7 @@ export default function HistorialScreen() {
       {fechasValidas && !cargando && total > 0 && (
         <Text style={styles.contador}>
           {total} {total === 1 ? 'movimiento' : 'movimientos'}
-          {agrupado && ' · toca un período para ver sus movimientos'}
+          {agrupado && ' · toca un período para desplegarlo'}
         </Text>
       )}
     </View>
@@ -284,9 +296,35 @@ export default function HistorialScreen() {
           ListHeaderComponent={encabezado}
           contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
           keyboardShouldPersistTaps="handled"
-          renderItem={({ item }) => (
-            <FilaGrupo grupo={item} agrupacion={evolucion.agrupacion} tipo={tipo} onPress={() => verGrupo(item)} />
-          )}
+          extraData={desplegados}
+          renderItem={({ item }) => {
+            const desplegado = desplegados.has(item.desde);
+            return (
+              <View>
+                <FilaGrupo
+                  grupo={item}
+                  agrupacion={evolucion.agrupacion}
+                  tipo={tipo}
+                  desplegado={desplegado}
+                  onPress={() => alternarGrupo(item)}
+                />
+                {desplegado && (
+                  <View style={styles.desplegado}>
+                    {porDiaConTotales(movimientos.filter((m) => m.fecha >= item.desde && m.fecha <= item.hasta)).map(
+                      (dia) => (
+                        <View key={dia.fecha}>
+                          <EncabezadoDia titulo={dia.titulo} ingresos={dia.ingresos} gastos={dia.gastos} />
+                          {dia.data.map((m) => (
+                            <FilaMovimiento key={m.id} movimiento={m} onPress={() => abrirMovimiento(m.id)} />
+                          ))}
+                        </View>
+                      ),
+                    )}
+                  </View>
+                )}
+              </View>
+            );
+          }}
           ListHeaderComponentStyle={{ marginBottom: 12 }}
           refreshControl={recargarControl}
           ListEmptyComponent={vacio}
@@ -302,18 +340,7 @@ export default function HistorialScreen() {
           renderSectionHeader={({ section }) => (
             <EncabezadoDia titulo={section.titulo} ingresos={section.ingresos} gastos={section.gastos} />
           )}
-          renderItem={({ item }) => (
-            <FilaMovimiento
-              movimiento={item}
-              onPress={() =>
-                setSheet((s) => ({
-                  abierto: true,
-                  id: item.id,
-                  clave: s.clave + 1,
-                }))
-              }
-            />
-          )}
+          renderItem={({ item }) => <FilaMovimiento movimiento={item} onPress={() => abrirMovimiento(item.id)} />}
           refreshControl={recargarControl}
           ListEmptyComponent={vacio}
         />
@@ -344,6 +371,14 @@ function Cifra({ texto, valor, color }: { texto: string; valor: number; color: s
       </Text>
     </View>
   );
+}
+
+/** Movimientos de un grupo desplegado, por día y con los totales de cada día (están todos cargados). */
+function porDiaConTotales(movimientos: Movimiento[]) {
+  return agruparPorDia(movimientos).map((dia) => {
+    const { ingresos, gastos } = totales(dia.data);
+    return { ...dia, fecha: dia.data[0].fecha, ingresos, gastos };
+  });
 }
 
 const crearEstilos = (colores: Paleta) =>
@@ -383,6 +418,15 @@ const crearEstilos = (colores: Paleta) =>
     cifraValor: { fontSize: 16, fontWeight: '800' },
     separador: { width: 1, height: 32, backgroundColor: colores.borde },
     contador: { fontSize: 13, color: colores.textoSuave },
+    // Lo desplegado de un grupo, con una línea a la izquierda para ver a qué grupo pertenece.
+    desplegado: {
+      marginLeft: 10,
+      paddingLeft: 12,
+      borderLeftWidth: 2,
+      borderLeftColor: colores.primarioSuave,
+      marginBottom: 12,
+      marginTop: -8,
+    },
     etiqueta: { fontSize: 13, fontWeight: '600', color: colores.textoSuave },
     error: { color: colores.gasto },
     vacio: { alignItems: 'center', gap: 10, marginTop: 40 },

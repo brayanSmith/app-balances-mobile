@@ -10,6 +10,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -153,7 +154,8 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
           </Pressable>
         </LinearGradient>
 
-        <View style={styles.opciones}>
+        {/* Con scroll: en pantallas bajas (o con más opciones) no caben todas. "Cerrar sesión" queda fijo abajo. */}
+        <ScrollView style={styles.opciones} contentContainerStyle={styles.opcionesContenido}>
           <Opcion icono="home-outline" texto="Inicio" onPress={onClose} />
           <Opcion icono="time-outline" texto="Historial" onPress={() => ir('/historial')} />
           <Opcion icono="analytics-outline" texto="Análisis" onPress={() => ir('/analisis')} />
@@ -209,7 +211,7 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
               onRestablecer();
             }}
           />
-        </View>
+        </ScrollView>
 
         <Pressable
           onPress={cerrarSesion}
@@ -265,7 +267,8 @@ const crearEstilos = (colores: Paleta) =>
     avatar: { marginBottom: 12, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)' },
     nombre: { color: '#fff', fontSize: 18, fontWeight: '700' },
     correo: { color: 'rgba(255,255,255,0.85)', fontSize: 13, marginTop: 2 },
-    opciones: { flex: 1, paddingHorizontal: 12, paddingTop: 16, gap: 4 },
+    opciones: { flex: 1 },
+    opcionesContenido: { paddingHorizontal: 12, paddingTop: 16, paddingBottom: 12, gap: 4 },
     opcion: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -292,6 +295,7 @@ const crearEstilos = (colores: Paleta) =>
       justifyContent: 'center',
       gap: 8,
       marginHorizontal: 16,
+      marginTop: 8,
       paddingVertical: 14,
       borderRadius: radio.md,
       backgroundColor: colores.gastoSuave,
