@@ -19,6 +19,7 @@ import { Avatar } from '@/components/Avatar';
 import { Boton } from '@/components/Boton';
 import { EliminarCuentaSheet } from '@/components/EliminarCuentaSheet';
 import { useSession } from '@/context/auth';
+import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
 import { mensajeDeError, perfilApi } from '@/lib/api';
 import { radio, type NombreIcono, type Paleta } from '@/lib/theme';
@@ -37,6 +38,7 @@ export default function PerfilScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <Foto />
+        <DondeSeGuarda />
         <DatosPersonales />
         <CambiarPassword />
 
@@ -286,6 +288,27 @@ function CambiarPassword() {
         cargando={guardando}
         deshabilitado={(!crear && !actual) || nueva.length < 8 || nueva !== confirmacion}
       />
+    </Seccion>
+  );
+}
+
+/** Dónde quedan los datos de la cuenta (lo elige el administrador): que la persona sepa qué pierde si cambia de teléfono. */
+function DondeSeGuarda() {
+  const styles = useEstilos(crearEstilos);
+  const { modo } = useSincronizacion();
+
+  return modo === 'local' ? (
+    <Seccion icono="phone-portrait-outline" titulo="Tus datos están solo en este teléfono">
+      <Text style={styles.ayuda}>
+        No se guardan en internet. Si desinstalas la app, borras sus datos o cambias de teléfono, se pierden. Si
+        necesitas una copia en la nube, pídesela al administrador de Balances.
+      </Text>
+    </Seccion>
+  ) : (
+    <Seccion icono="cloud-done-outline" titulo="Tus datos están en la nube">
+      <Text style={styles.ayuda}>
+        Se guardan en este teléfono y se sincronizan con el servidor: los recuperas si cambias de teléfono.
+      </Text>
     </Seccion>
   );
 }
