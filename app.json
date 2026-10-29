@@ -32,7 +32,15 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-router",
+      [
+        "expo-router",
+        {
+          "headers": {
+            "Cross-Origin-Embedder-Policy": "credentialless",
+            "Cross-Origin-Opener-Policy": "same-origin"
+          }
+        }
+      ],
       [
         "expo-image-picker",
         {
@@ -48,7 +56,8 @@
           "color": "#059669"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-sqlite"
     ],
     "scheme": "balances",
     "experiments": {

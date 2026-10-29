@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { isAxiosError } from 'axios';
 import * as DocumentPicker from 'expo-document-picker';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
@@ -7,14 +6,16 @@ import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, Sty
 
 import { Boton } from '@/components/Boton';
 import { CAMPOS, camposFaltantes, MapeoColumnasSheet } from '@/components/MapeoColumnasSheet';
-import { useCategorias } from '@/context/categorias';
+import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { importacionesApi, mensajeDeError } from '@/lib/api';
+import { mensajeDeError, urlPlantilla } from '@/lib/api';
+import { borrarTemporales } from '@/lib/archivos';
+import { leerComprimido, type Comprimido } from '@/lib/comprimido';
+import { ErrorDeImportacion, importacionesDb } from '@/lib/db/importaciones';
 import { formatearFechaCorta, formatearMonto, textoRepeticion } from '@/lib/format';
 import { radio, type Paleta } from '@/lib/theme';
 import type {
   ArchivoLocal,
-  ComprimidoSubido,
   FormatoFecha,
   Importacion,
   MapeoImportacion,
@@ -25,7 +26,7 @@ import type {
 interface OpcionesVista {
   mapeo?: MapeoImportacion;
   formato?: FormatoFecha;
-  comprimido?: string | null;
+  comprimido?: Comprimido | null;
 }
 
 interface ErroresImportacion {
@@ -38,13 +39,14 @@ interface ErroresImportacion {
 export default function ImportarScreen() {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { recargar: recargarCategorias } = useCategorias();
+  // Los comprobantes del ZIP: en la nube se suben, en una cuenta local se guardan en el teléfono.
+  const { subirAdjuntos } = useSincronizacion();
 
   const [archivo, setArchivo] = useState<ArchivoLocal | null>(null);
   const [vista, setVista] = useState<Previsualizacion | null>(null);
   const [resultado, setResultado] = useState<ResultadoImportacion | null>(null);
   const [errores, setErrores] = useState<ErroresImportacion | null>(null);
-  const [comprimido, setComprimido] = useState<ComprimidoSubido | null>(null);
+  const [comprimido, setComprimido] = useState<Comprimido | null>(null);
   const [subiendoComprimido, setSubiendoComprimido] = useState(false);
   // "clave" cambia en cada apertura para que la ventana arranque con el mapeo actual.
   const [ventanaMapeo, setVentanaMapeo] = useState({ abierta: false, clave: 0 });
@@ -56,7 +58,7 @@ export default function ImportarScreen() {
   const peticion = useRef(0);
 
   const cargarHistorial = useCallback(() => {
-    importacionesApi.listar().then(setHistorial).catch(() => {});
+    importacionesDb.listar().then(setHistorial).catch(() => {});
   }, []);
 
   useFocusEffect(cargarHistorial);
@@ -70,7 +72,7 @@ export default function ImportarScreen() {
     setError(null);
     setErrores(null);
     try {
-      const nueva = await importacionesApi.previsualizar(elegido, opciones);
+      const nueva = await importacionesDb.previsualizar(elegido, opciones);
       if (n !== peticion.current) return;
       setVista(nueva);
       if (abrirAlTerminar) abrirMapeo();
@@ -90,7 +92,7 @@ export default function ImportarScreen() {
     setVista(null);
     setResultado(null);
     // Al elegir el CSV se abre la ventana para relacionar las columnas.
-    previsualizar(elegido, { comprimido: comprimido?.token }, true);
+    previsualizar(elegido, { comprimido }, true);
   }
 
   async function elegirComprimido() {
@@ -100,14 +102,10 @@ export default function ImportarScreen() {
     setSubiendoComprimido(true);
     setError(null);
     try {
-      const subido = await importacionesApi.subirComprimido({
-        uri: a.uri,
-        nombre: a.name,
-        mime: a.mimeType ?? 'application/zip',
-        file: a.file,
-      });
-      setComprimido(subido);
-      previsualizar(archivo, { mapeo: vista.mapeo, formato: vista.formato_fecha, comprimido: subido.token });
+      // Se lee en el teléfono: solo la lista de archivos, sin descomprimir todavía.
+      const leido = await leerComprimido({ uri: a.uri, nombre: a.name, mime: a.mimeType ?? 'application/zip', file: a.file });
+      setComprimido(leido);
+      previsualizar(archivo, { mapeo: vista.mapeo, formato: vista.formato_fecha, comprimido: leido });
     } catch (e) {
       setError(mensajeDeError(e));
     } finally {
@@ -124,7 +122,7 @@ export default function ImportarScreen() {
     cerrarMapeo();
     if (!archivo || !vista) return;
     setVista({ ...vista, mapeo, formato_fecha: formato });
-    previsualizar(archivo, { mapeo, formato, comprimido: comprimido?.token });
+    previsualizar(archivo, { mapeo, formato, comprimido });
   }
 
   async function importar(omitirErrores: boolean) {
@@ -133,21 +131,25 @@ export default function ImportarScreen() {
     setError(null);
     setErrores(null);
     try {
-      const r = await importacionesApi.importar(
+      const { resultado: r, adjuntos } = await importacionesDb.importar(
         archivo,
-        { mapeo: vista.mapeo, formato: vista.formato_fecha, comprimido: comprimido?.token ?? null },
+        { mapeo: vista.mapeo, formato: vista.formato_fecha, comprimido },
         omitirErrores,
       );
+      // Cada destino hace su propia copia: después se borran los temporales extraídos del ZIP.
+      for (const { movimientoId, archivos } of adjuntos) await subirAdjuntos(movimientoId, archivos);
+      borrarTemporales();
       setResultado(r);
       setArchivo(null);
       setVista(null);
       setComprimido(null);
       cargarHistorial();
-      if (r.categorias_creadas.length) recargarCategorias();
     } catch (e) {
-      const datos = isAxiosError(e) ? (e.response?.data as Partial<ErroresImportacion> | undefined) : undefined;
-      if (datos?.errores) setErrores(datos as ErroresImportacion);
-      else setError(mensajeDeError(e));
+      if (e instanceof ErrorDeImportacion) {
+        setErrores({ message: e.message, errores: e.errores, con_error: e.conError, validas: e.validas });
+      } else {
+        setError(mensajeDeError(e));
+      }
     } finally {
       setImportando(false);
     }
@@ -157,7 +159,7 @@ export default function ImportarScreen() {
 
   async function deshacer(importacion: Importacion) {
     try {
-      await importacionesApi.deshacer(importacion.id);
+      await importacionesDb.deshacer(importacion.id);
       cargarHistorial();
       setResultado(null);
     } catch (e) {
@@ -251,7 +253,7 @@ export default function ImportarScreen() {
             ))}
           </View>
           <Boton texto="Elegir archivo CSV" onPress={elegirArchivo} cargando={cargando} />
-          <Pressable onPress={() => Linking.openURL(importacionesApi.urlPlantilla())} style={styles.enlace}>
+          <Pressable onPress={() => Linking.openURL(urlPlantilla())} style={styles.enlace}>
             <Ionicons name="download-outline" size={18} color={colores.primario} />
             <Text style={styles.enlaceTexto}>Descargar plantilla de ejemplo</Text>
           </Pressable>
@@ -313,7 +315,7 @@ export default function ImportarScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.titulo}>Comprobantes (opcional)</Text>
                 <Text style={styles.ayuda}>
-                  Sube un ZIP o RAR con las fotos y PDF que nombra la columna «Adjunto» y se adjuntan solos.
+                  Elige un ZIP con las fotos y PDF que nombra la columna «Adjunto» y se adjuntan solos.
                 </Text>
               </View>
             </View>
@@ -343,12 +345,12 @@ export default function ImportarScreen() {
                 {subiendoComprimido ? (
                   <>
                     <ActivityIndicator color={colores.primario} />
-                    <Text style={styles.enlaceTexto}>Subiendo y descomprimiendo…</Text>
+                    <Text style={styles.enlaceTexto}>Leyendo el ZIP…</Text>
                   </>
                 ) : (
                   <>
-                    <Ionicons name="cloud-upload-outline" size={20} color={colores.primario} />
-                    <Text style={styles.enlaceTexto}>Subir ZIP o RAR</Text>
+                    <Ionicons name="folder-open-outline" size={20} color={colores.primario} />
+                    <Text style={styles.enlaceTexto}>Elegir ZIP</Text>
                   </>
                 )}
               </Pressable>
@@ -368,7 +370,7 @@ export default function ImportarScreen() {
                   {vista.adjuntos.encontrados} de {vista.adjuntos.referenciados} comprobantes encontrados
                 </Text>
                 {!comprimido && (
-                  <Text style={styles.ayudaCampo}>El CSV nombra comprobantes: sube el comprimido que los contiene.</Text>
+                  <Text style={styles.ayudaCampo}>El CSV nombra comprobantes: elige el ZIP que los contiene.</Text>
                 )}
                 {comprimido &&
                   vista.adjuntos.faltantes.slice(0, 5).map((a) => (

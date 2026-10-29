@@ -53,6 +53,16 @@ export const etiquetaDia = (fecha: string) => {
 export const desplazar = (fecha: string, cantidad: number, frecuencia: Frecuencia) =>
   aTexto(sumar(desdeTexto(fecha), cantidad, frecuencia));
 
+/** Días de `desde` a `hasta`, ambas "YYYY-MM-DD" (negativo si `hasta` es antes). */
+export const diasEntre = (desde: string, hasta: string) => {
+  // En UTC para que el cambio de horario no corra un día.
+  const utc = (fecha: string) => {
+    const [anio, mes, dia] = fecha.split('-').map(Number);
+    return Date.UTC(anio, mes - 1, dia);
+  };
+  return Math.round((utc(hasta) - utc(desde)) / 86400000);
+};
+
 const UNIDADES: Record<Frecuencia, [string, string]> = {
   dias: ['Diario', 'días'],
   semanas: ['Semanal', 'semanas'],

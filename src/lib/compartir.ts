@@ -8,8 +8,12 @@ import type { Adjunto } from './types';
 /** Nombre del archivo en la caché del celular (sin caracteres raros). */
 const nombreEnCache = (adjunto: Adjunto) => `${adjunto.id}-${adjunto.nombre.replace(/[^\w.-]+/g, '_')}`;
 
+/** De una cuenta que guarda solo en el teléfono: el archivo ya está aquí. */
+const yaEnElTelefono = (adjunto: Adjunto) => adjunto.url.startsWith('file:');
+
 /** Descarga el comprobante (enlace firmado) a la caché para poder compartirlo como archivo. */
-function descargar(adjunto: Adjunto) {
+async function descargar(adjunto: Adjunto) {
+  if (yaEnElTelefono(adjunto)) return new ArchivoLocal(adjunto.url);
   return ArchivoLocal.downloadFileAsync(adjunto.url, new ArchivoLocal(Paths.cache, nombreEnCache(adjunto)), {
     idempotent: true,
   });
@@ -49,7 +53,7 @@ export async function compartirAdjunto(adjunto: Adjunto) {
 export async function abrirAdjunto(adjunto: Adjunto) {
   if (Platform.OS === 'web') {
     window.open(adjunto.url, '_blank', 'noopener');
-  } else if (Platform.OS === 'ios') {
+  } else if (Platform.OS === 'ios' && !yaEnElTelefono(adjunto)) {
     await WebBrowser.openBrowserAsync(adjunto.url);
   } else {
     const archivo = await descargar(adjunto);

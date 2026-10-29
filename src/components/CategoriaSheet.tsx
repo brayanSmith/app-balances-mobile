@@ -6,7 +6,8 @@ import { BottomSheet } from '@/components/BottomSheet';
 import { Boton } from '@/components/Boton';
 import { CategoriaIcono } from '@/components/CategoriaIcono';
 import { Segmentado } from '@/components/Segmentado';
-import { categoriasApi, mensajeDeError } from '@/lib/api';
+import { mensajeDeError } from '@/lib/api';
+import { categoriasDb } from '@/lib/db/categorias';
 import { useEstilos, useTema } from '@/context/tema';
 import { conAlpha, ICONOS, PALETA, type Paleta, radio } from '@/lib/theme';
 import type { Categoria, TipoMovimiento } from '@/lib/types';
@@ -38,8 +39,8 @@ export function CategoriaSheet({ visible, onClose, categoria, tipoInicial = 'gas
     const input = { tipo, nombre: nombre.trim(), icono, color };
     try {
       const guardada = categoria
-        ? await categoriasApi.actualizar(categoria.id, input)
-        : await categoriasApi.crear(input);
+        ? await categoriasDb.actualizar(categoria.id, input)
+        : await categoriasDb.crear(input);
       onGuardada(guardada);
     } catch (e) {
       setError(mensajeDeError(e));
@@ -51,7 +52,7 @@ export function CategoriaSheet({ visible, onClose, categoria, tipoInicial = 'gas
   async function eliminar() {
     if (!categoria) return;
     try {
-      await categoriasApi.eliminar(categoria.id);
+      await categoriasDb.eliminar(categoria.id);
       onEliminada?.();
     } catch (e) {
       setError(mensajeDeError(e));

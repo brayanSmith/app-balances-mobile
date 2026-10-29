@@ -42,21 +42,18 @@ export function MenuLateral({ visible, onClose, onRestablecer }: Props) {
   const { colores, esOscuro, setPreferencia } = useTema();
   const styles = useEstilos(crearEstilos);
   const { user, signOut } = useSession();
-  const { cola, vaciar } = useSincronizacion();
+  const { porEnviar } = useSincronizacion();
   const recordatorios = useRecordatorios();
 
-  // Lo que está en cola sin enviar se pierde al cerrar sesión: se advierte antes.
+  // Al cerrar sesión se borran los datos del teléfono: lo que no se envió se pierde, se advierte antes.
   function cerrarSesion() {
     onClose();
-    if (cola.length === 0) {
+    if (porEnviar === 0) {
       signOut();
       return;
     }
-    const mensaje = `Tienes ${cola.length} ${cola.length === 1 ? 'cambio' : 'cambios'} sin enviar por falta de conexión. Si cierras sesión se perderán.`;
-    const salir = async () => {
-      await vaciar();
-      await signOut();
-    };
+    const mensaje = `Tienes ${porEnviar} ${porEnviar === 1 ? 'cambio' : 'cambios'} sin enviar por falta de conexión. Si cierras sesión se perderán.`;
+    const salir = signOut;
     // Alert con botones no funciona en web.
     if (Platform.OS === 'web') {
       if (window.confirm(`${mensaje}

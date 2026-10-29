@@ -22,23 +22,21 @@ export default function CategoriasScreen() {
   const insets = useSafeAreaInsets();
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { categorias, recargar } = useCategorias();
+  const { categorias } = useCategorias();
   const [tipo, setTipo] = useState<TipoMovimiento>('gasto');
   const [sheet, setSheet] = useState<EstadoSheet>({ abierto: false, categoria: null, clave: 0 });
 
   const abrir = (categoria: Categoria | null) =>
     setSheet((s) => ({ abierto: true, categoria, clave: s.clave + 1 }));
   const cerrar = () => setSheet((s) => ({ ...s, abierto: false }));
-  const alTerminar = async () => {
-    cerrar();
-    await recargar();
-  };
+  // La lista se actualiza sola (lee de la base local).
+  const alTerminar = cerrar;
 
   return (
     <View style={styles.container}>
       <FlatList
         data={categorias.filter((c) => c.tipo === tipo)}
-        keyExtractor={(c) => String(c.id)}
+        keyExtractor={(c) => c.id}
         contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: insets.bottom + 110 }}
         ListHeaderComponent={
           <View style={{ marginBottom: 6 }}>

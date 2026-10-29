@@ -5,7 +5,6 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { BottomSheet } from '@/components/BottomSheet';
 import { Boton } from '@/components/Boton';
 import { useSession } from '@/context/auth';
-import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
 import { mensajeDeError } from '@/lib/api';
 import { radio, type NombreIcono, type Paleta } from '@/lib/theme';
@@ -30,7 +29,6 @@ export function EliminarCuentaSheet({ visible, onClose }: Props) {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
   const { user, eliminarCuenta } = useSession();
-  const { vaciar } = useSincronizacion();
   const [confirmacion, setConfirmacion] = useState('');
   const [password, setPassword] = useState('');
   const [eliminando, setEliminando] = useState(false);
@@ -44,10 +42,8 @@ export function EliminarCuentaSheet({ visible, onClose }: Props) {
     setError(null);
     setEliminando(true);
     try {
+      // También borra los datos del teléfono. Al cerrarse la sesión la app vuelve sola al login.
       await eliminarCuenta(confirmacion.trim(), pidePassword ? password : null);
-      // Lo que quedó en el teléfono sin enviar ya no tiene a dónde ir.
-      await vaciar().catch(() => {});
-      // Al cerrarse la sesión la app vuelve sola al login.
     } catch (e) {
       setError(mensajeDeError(e));
       setEliminando(false);

@@ -120,18 +120,6 @@ export function FilaMovimiento({ movimiento, onPress }: { movimiento: Movimiento
         </Text>
         <View style={styles.detalleFila}>
           <Text style={styles.detalle}>{movimiento.categoria?.nombre ?? 'Sin categoría'}</Text>
-          {movimiento.local && (
-            <View style={[styles.etiqueta, movimiento.local.error ? styles.etiquetaError : styles.etiquetaLocal]}>
-              <Ionicons
-                name={movimiento.local.error ? 'alert-circle' : movimiento.local.enviando ? 'sync' : 'cloud-upload-outline'}
-                size={12}
-                color={movimiento.local.error ? colores.gasto : colores.aviso}
-              />
-              <Text style={[styles.etiquetaTexto, { color: movimiento.local.error ? colores.gasto : colores.aviso }]}>
-                {movimiento.local.error ? 'No se envió' : movimiento.local.enviando ? 'Enviando…' : 'Sin enviar'}
-              </Text>
-            </View>
-          )}
           {movimiento.programado && (
             <View style={styles.etiqueta}>
               <Ionicons name="repeat" size={11} color={colores.primario} />
@@ -189,8 +177,6 @@ const crearEstilos = (colores: Paleta) =>
       paddingVertical: 2,
     },
     etiquetaTexto: { fontSize: 11, fontWeight: '600', color: colores.primario },
-    etiquetaLocal: { backgroundColor: colores.avisoSuave },
-    etiquetaError: { backgroundColor: colores.gastoSuave },
     monto: { fontSize: 16, fontWeight: '700' },
     grupoIcono: {
       width: 40,

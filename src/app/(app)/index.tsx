@@ -1,11 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { router } from 'expo-router';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
-  Platform,
   Pressable,
   RefreshControl,
   SectionList,
@@ -25,20 +23,30 @@ import { PagarSheet } from '@/components/PagarSheet';
 import { PagosPendientes } from '@/components/PagosPendientes';
 import { RestablecerSheet } from '@/components/RestablecerSheet';
 import { useSession } from '@/context/auth';
-import { useCategorias } from '@/context/categorias';
 import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { mensajeDeError, movimientosApi, programacionesApi } from '@/lib/api';
-import type { EnCola } from '@/lib/cola';
+import { mensajeDeError } from '@/lib/api';
+import { movimientosDb } from '@/lib/db/movimientos';
+import { programacionesDb } from '@/lib/db/programaciones';
+import { useConsulta } from '@/lib/db/useConsulta';
 import { claveMes, formatearMonto, nombreMes } from '@/lib/format';
-import { conCache } from '@/lib/offline';
 import { degradado, degradadoNegativo, type NombreIcono, type Paleta, radio } from '@/lib/theme';
-import type { Movimiento, Pendiente, Resumen } from '@/lib/types';
+import type { Pendiente, Resumen } from '@/lib/types';
 
 interface EstadoSheet {
   abierto: boolean;
-  id: number | null;
+  id: string | null;
   clave: number; // cambia en cada apertura para empezar con el formulario limpio
+}
+
+/** Lista, totales y pendientes del mes, de la base local (se actualizan solos con cada cambio). */
+async function datosDelMes(mes: string) {
+  const [movimientos, resumen, pendientes] = await Promise.all([
+    movimientosDb.listar({ mes }),
+    movimientosDb.resumen({ mes }),
+    programacionesDb.pendientes({ mes }),
+  ]);
+  return { movimientos, resumen, pendientes };
 }
 
 export default function HomeScreen() {
@@ -46,19 +54,18 @@ export default function HomeScreen() {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
   const { user } = useSession();
-  const { recargar: recargarCategorias } = useCategorias();
-  const { cola, enLinea, version, descartar, reintentar, vaciar } = useSincronizacion();
+  const { sincronizar, reiniciar } = useSincronizacion();
   const [mes, setMes] = useState(() => new Date());
-  const [movimientos, setMovimientos] = useState<Movimiento[]>([]);
-  const [resumen, setResumen] = useState<Resumen | null>(null);
-  const [cargando, setCargando] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const clave = claveMes(mes);
+  const consulta = useConsulta(() => datosDelMes(clave), ['movimientos', 'programaciones', 'categorias'], [clave]);
+  const datos = consulta.datos;
+  const cargando = consulta.cargando;
+  const error = consulta.error ? mensajeDeError(consulta.error) : null;
+  const resumen = datos?.resumen ?? null;
   const [menuAbierto, setMenuAbierto] = useState(false);
   const [restablecer, setRestablecer] = useState({ abierto: false, clave: 0 });
   const [aviso, setAviso] = useState<string | null>(null);
-  const [pendientes, setPendientes] = useState<Pendiente[]>([]);
-  // Cuándo se guardaron los datos mostrados si vienen de la caché (sin conexión).
-  const [guardadoEn, setGuardadoEn] = useState<number | null>(null);
+  const [refrescando, setRefrescando] = useState(false);
   const [pago, setPago] = useState<{
     abierto: boolean;
     pendiente: Pendiente | null;
@@ -74,125 +81,23 @@ export default function HomeScreen() {
     clave: 0,
   });
 
-  // forzar: no usar lo que está en memoria (deslizar para recargar, Reintentar).
-  const cargar = useCallback(
-    async (forzar = false) => {
-      setError(null);
-      try {
-        const filtros = { mes: claveMes(mes) };
-        // Sin conexión se muestra lo último guardado de este mes.
-        const [lista, totales, porPagar] = await Promise.all([
-          conCache(`inicio:${filtros.mes}:lista`, () => movimientosApi.listar(filtros), { forzar }),
-          conCache(`inicio:${filtros.mes}:resumen`, () => movimientosApi.resumen(filtros), { forzar }),
-          conCache(`inicio:${filtros.mes}:pendientes`, () => programacionesApi.pendientes({ mes: filtros.mes }), {
-            forzar,
-          }),
-        ]);
-        setMovimientos(lista.datos);
-        setResumen(totales.datos);
-        setPendientes(porPagar.datos);
-        const fechas = [lista, totales, porPagar].map((r) => r.guardadoEn).filter((f) => f !== null);
-        setGuardadoEn(fechas.length ? Math.min(...fechas) : null);
-      } catch (e) {
-        setError(mensajeDeError(e));
-      } finally {
-        setCargando(false);
-      }
-      // "version" cambia al enviar lo que estaba en cola o al volver la conexión: hay que recargar.
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mes, version],
-  );
+  const movimientos = datos?.movimientos;
+  const secciones = useMemo(() => agruparPorDia(movimientos ?? []), [movimientos]);
+  const pendientes = datos?.pendientes ?? [];
 
-  // Recarga al entrar a la pantalla (también al volver de Categorías) y al cambiar de mes.
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
-
-  // Lo registrado sin conexión que aún no llega a la API, como filas "locales".
-  const locales = useMemo(() => {
-    const clave = claveMes(mes);
-    return cola
-      .filter((e) => e.movimientoId === null && e.vista.fecha.startsWith(clave))
-      .map((e, i): [number, EnCola, Movimiento] => [
-        -(i + 1),
-        e,
-        {
-          id: -(i + 1),
-          tipo: e.vista.tipo,
-          monto: e.vista.monto,
-          descripcion: e.vista.descripcion,
-          categoria: e.vista.categoria,
-          fecha: e.vista.fecha,
-          fecha_programada: null,
-          adjuntos_count: e.archivos.length,
-          programado: e.operacion.tipo === 'pago',
-          programacion: null,
-          local: { error: e.error, enviando: enLinea && !e.error },
-        },
-      ]);
-  }, [cola, mes, enLinea]);
-
-  const secciones = useMemo(() => {
-    const todos = [...locales.map(([, , m]) => m), ...movimientos];
-    todos.sort((a, b) => b.fecha.localeCompare(a.fecha));
-    return agruparPorDia(todos);
-  }, [locales, movimientos]);
-
-  // Totales del mes + lo que está en cola, para que el balance refleje lo registrado.
-  const resumenVisible = useMemo(() => {
-    if (!resumen) return null;
-    let ingresos = resumen.ingresos;
-    let gastos = resumen.gastos;
-    for (const [, , m] of locales) {
-      if (m.tipo === 'ingreso') ingresos += m.monto;
-      else gastos += m.monto;
-    }
-    return { ...resumen, ingresos, gastos, balance: ingresos - gastos };
-  }, [resumen, locales]);
-
-  // Un programado con el pago en cola no se vuelve a ofrecer para pagar.
-  const pendientesVisibles = useMemo(() => {
-    const pagados = new Set(cola.flatMap((e) => (e.operacion.tipo === 'pago' ? [e.operacion.programacionId] : [])));
-    return pendientes.filter((p) => !pagados.has(p.id));
-  }, [pendientes, cola]);
-
-  /** Tocar un movimiento que aún no se envía: ver el motivo del error, reintentar o descartarlo. */
-  function accionLocal(id: number) {
-    const elemento = locales.find(([idLocal]) => idLocal === id)?.[1];
-    // Se está enviando en este momento: descartarlo podría chocar con el envío.
-    if (!elemento || (enLinea && !elemento.error)) return;
-    const mensaje = elemento.error
-      ? `No se pudo enviar: ${elemento.error}`
-      : 'Todavía no se envía: se enviará solo cuando haya conexión.';
-
-    if (Platform.OS === 'web') {
-      if (elemento.error && window.confirm(`${mensaje}\n\n¿Reintentar ahora?`)) reintentar(elemento.id);
-      else if (window.confirm(`${mensaje}\n\n¿Descartar este movimiento?`)) descartar(elemento.id);
-      return;
-    }
-    Alert.alert(elemento.vista.descripcion, mensaje, [
-      { text: 'Cerrar', style: 'cancel' },
-      ...(elemento.error ? [{ text: 'Reintentar', onPress: () => reintentar(elemento.id) }] : []),
-      {
-        text: 'Descartar',
-        style: 'destructive' as const,
-        onPress: () => descartar(elemento.id),
-      },
-    ]);
+  // Deslizar hacia abajo: trae lo registrado desde otros dispositivos.
+  async function refrescar() {
+    setRefrescando(true);
+    await sincronizar();
+    setRefrescando(false);
   }
 
-  const enNegativo = (resumenVisible?.balance ?? 0) < 0;
+  const enNegativo = (resumen?.balance ?? 0) < 0;
   const serieBalance = useMemo(() => (resumen?.balance_diario ?? []).map((d) => d.balance), [resumen]);
 
-  const cambiarMes = (delta: number) => {
-    setCargando(true);
-    setMes((m) => new Date(m.getFullYear(), m.getMonth() + delta, 1));
-  };
+  const cambiarMes = (delta: number) => setMes((m) => new Date(m.getFullYear(), m.getMonth() + delta, 1));
 
-  const abrirSheet = (id: number | null) => setSheet((s) => ({ abierto: true, id, clave: s.clave + 1 }));
+  const abrirSheet = (id: string | null) => setSheet((s) => ({ abierto: true, id, clave: s.clave + 1 }));
   const cerrarSheet = () => setSheet((s) => ({ ...s, abierto: false }));
 
   const encabezado = (
@@ -205,11 +110,11 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      <EstadoConexion guardadoEn={guardadoEn} onReintentar={() => cargar(true)} />
+      <EstadoConexion />
 
-      {pendientesVisibles.length > 0 && (
+      {pendientes.length > 0 && (
         <PagosPendientes
-          pendientes={pendientesVisibles}
+          pendientes={pendientes}
           mes={nombreMes(mes)}
           onPagar={(pendiente) => setPago((p) => ({ abierto: true, pendiente, clave: p.clave + 1 }))}
         />
@@ -233,7 +138,7 @@ export default function HomeScreen() {
         </View>
 
         <Text style={styles.balanceLabel}>Balance del mes</Text>
-        <Text style={styles.balance}>{formatearMonto(resumenVisible?.balance ?? 0)}</Text>
+        <Text style={styles.balance}>{formatearMonto(resumen?.balance ?? 0)}</Text>
 
         {/* Cómo fue cambiando el balance a lo largo del mes. */}
         {serieBalance.length > 1 && (
@@ -243,8 +148,8 @@ export default function HomeScreen() {
         )}
 
         <View style={styles.totales}>
-          <Total icono="arrow-down" texto="Ingresos" valor={resumenVisible?.ingresos ?? 0} color={colores.ingreso} />
-          <Total icono="arrow-up" texto="Gastos" valor={resumenVisible?.gastos ?? 0} color={colores.gasto} />
+          <Total icono="arrow-down" texto="Ingresos" valor={resumen?.ingresos ?? 0} color={colores.ingreso} />
+          <Total icono="arrow-up" texto="Gastos" valor={resumen?.gastos ?? 0} color={colores.gasto} />
         </View>
       </LinearGradient>
 
@@ -284,16 +189,16 @@ export default function HomeScreen() {
       ) : (
         <SectionList
           sections={secciones}
-          keyExtractor={(m) => String(m.id)}
+          keyExtractor={(m) => m.id}
           ListHeaderComponent={encabezado}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 120 }}
-          refreshControl={<RefreshControl refreshing={false} onRefresh={() => cargar(true)} />}
+          refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} />}
           stickySectionHeadersEnabled={false}
           renderSectionHeader={({ section }) => <EncabezadoDia titulo={section.titulo} />}
           renderItem={({ item }) => (
             <FilaMovimiento
               movimiento={item}
-              onPress={() => (item.local ? accionLocal(item.id) : abrirSheet(item.id))}
+              onPress={() => abrirSheet(item.id)}
             />
           )}
           ListEmptyComponent={
@@ -341,7 +246,6 @@ export default function HomeScreen() {
           onListo={(mensaje) => {
             setPago((p) => ({ ...p, abierto: false }));
             setAviso(mensaje);
-            cargar();
           }}
         />
       )}
@@ -352,10 +256,8 @@ export default function HomeScreen() {
         onClose={() => setRestablecer((r) => ({ ...r, abierto: false }))}
         onRestablecido={() => {
           setRestablecer((r) => ({ ...r, abierto: false }));
-          setAviso('Listo: tu cuenta quedó como nueva.');
-          vaciar(); // lo que estaba en cola ya no debe enviarse
-          recargarCategorias();
-          cargar();
+          // Lo del teléfono (y lo que no se había enviado) se borra y se vuelve a bajar de la API.
+          void reiniciar();
         }}
       />
 
@@ -367,7 +269,6 @@ export default function HomeScreen() {
         onGuardado={(mensaje) => {
           cerrarSheet();
           if (mensaje) setAviso(mensaje);
-          cargar();
         }}
       />
     </View>

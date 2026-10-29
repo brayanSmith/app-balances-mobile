@@ -1,7 +1,11 @@
 import { isAxiosError } from 'axios';
-import { createContext, use, useEffect, useState, type PropsWithChildren } from 'react';
+import { createContext, use, useEffect, useRef, useState, type PropsWithChildren } from 'react';
 
+import { borrarAdjuntosPendientes, leerAdjuntosPendientes } from '@/lib/adjuntosPendientes';
 import { authApi, cuentaApi, setAuthToken } from '@/lib/api';
+import { borrarArchivo } from '@/lib/cola';
+import { borrarBase } from '@/lib/db';
+import { borrarAdjuntosLocales } from '@/lib/db/adjuntos';
 import { borrarCache, usarCacheDe } from '@/lib/offline';
 import { cerrarGoogle, iniciarConGoogle } from '@/lib/google';
 import { cancelarRecordatorios } from '@/lib/recordatorios';
@@ -39,19 +43,34 @@ export function useSession() {
 export function SessionProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const usuarioActual = useRef<User | null>(null);
 
   // La caché es de cada usuario: se elige antes de que las pantallas pidan datos.
   function cambiarUsuario(nuevo: User | null) {
     usarCacheDe(nuevo?.id ?? null);
+    usuarioActual.current = nuevo;
     setUser(nuevo);
   }
 
-  async function cerrarLocalmente() {
+  /**
+   * Cierra la sesión en este teléfono. Si la cuenta guarda en la nube, sus datos se
+   * borran del teléfono (vuelven al entrar); si guarda solo en el teléfono, se conservan
+   * (son la única copia) salvo que se elimine la cuenta (`borrarDatos`).
+   */
+  async function cerrarLocalmente(borrarDatos = false) {
+    const anterior = usuarioActual.current;
     await setItem(TOKEN_KEY, null);
     await setItem(USER_KEY, null);
     setAuthToken(null);
     cambiarUsuario(null);
     await borrarCache().catch(() => {});
+    if (anterior && (borrarDatos || anterior.almacenamiento !== 'local')) {
+      const adjuntos = await leerAdjuntosPendientes(anterior.id);
+      adjuntos.forEach((a) => a.archivos.forEach(borrarArchivo));
+      await borrarAdjuntosPendientes(anterior.id);
+      await borrarBase(anterior.id);
+      borrarAdjuntosLocales(anterior.id);
+    }
     // Los recordatorios agendados son de esta cuenta.
     await cancelarRecordatorios().catch(() => {});
     // Y la próxima vez Google vuelve a preguntar con qué cuenta entrar.
@@ -109,12 +128,13 @@ export function SessionProvider({ children }: PropsWithChildren) {
     restablecerPassword: async (email, codigo, password) =>
       guardarSesion(await authApi.restablecerPassword(email, codigo, password)),
     actualizarUsuario: async (actual) => {
+      usuarioActual.current = actual;
       setUser(actual);
       await setItem(USER_KEY, JSON.stringify(actual));
     },
     eliminarCuenta: async (confirmacion, password) => {
       await cuentaApi.eliminar(confirmacion, password);
-      await cerrarLocalmente();
+      await cerrarLocalmente(true);
     },
     signOut: async () => {
       try {

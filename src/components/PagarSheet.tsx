@@ -7,11 +7,11 @@ import { BottomSheet } from '@/components/BottomSheet';
 import { Boton } from '@/components/Boton';
 import { CategoriaIcono } from '@/components/CategoriaIcono';
 import { textoVencimiento } from '@/components/PagosPendientes';
-import { nuevoClienteId, useSincronizacion } from '@/context/sincronizacion';
+import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { mensajeDeError, programacionesApi } from '@/lib/api';
+import { mensajeDeError } from '@/lib/api';
+import { programacionesDb } from '@/lib/db/programaciones';
 import { ayer, formatearFecha, formatearMonto, hoy } from '@/lib/format';
-import { esErrorDeRed, hayConexion } from '@/lib/offline';
 import { conAlpha, radio, type Paleta } from '@/lib/theme';
 import type { ArchivoLocal, PagoInput, Pendiente } from '@/lib/types';
 
@@ -30,9 +30,7 @@ interface Props {
 export function PagarSheet({ pendiente, visible, onClose, onListo }: Props) {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { encolar } = useSincronizacion();
-  // Id del pago: si el envío se repite (señal inestable), la API no lo registra dos veces.
-  const [clienteId] = useState(nuevoClienteId);
+  const { subirAdjuntos } = useSincronizacion();
   const esIngreso = pendiente.tipo === 'ingreso';
   const colorTipo = esIngreso ? colores.ingreso : colores.gasto;
 
@@ -51,33 +49,22 @@ export function PagarSheet({ pendiente, visible, onClose, onListo }: Props) {
     setGuardando(true);
     const pago: PagoInput = { monto: montoNumerico, fecha, actualizar_base: cambioElMonto && usarParaProximos };
     try {
-      // Queda en la cola y la hoja se cierra al instante: se envía en segundo plano
-      // (enseguida, o cuando vuelva internet) con su cliente_id, sin registrarlo dos veces.
-      await encolar(clienteId, { tipo: 'pago', programacionId: pendiente.id, datos: pago }, archivos, {
-        tipo: pendiente.tipo,
-        monto: pago.monto,
-        descripcion: pendiente.descripcion,
-        fecha: pago.fecha,
-        categoria: pendiente.categoria,
-      });
-      const que = esIngreso ? 'Ingreso' : 'Pago';
-      onListo(
-        hayConexion()
-          ? `${que} de ${pendiente.descripcion} registrado.`
-          : `${que} de ${pendiente.descripcion} guardado sin conexión: se enviará solo cuando vuelva internet.`,
-      );
-    } catch {
-      setError('No se pudo guardar en el teléfono. Inténtalo de nuevo.');
+      // Se guarda en el teléfono al instante; la sincronización lo envía (y luego los comprobantes).
+      const movimientoId = await programacionesDb.pagar(pendiente.id, pago);
+      await subirAdjuntos(movimientoId, archivos).catch(() => {});
+      onListo(`${esIngreso ? 'Ingreso' : 'Pago'} de ${pendiente.descripcion} registrado.`);
+    } catch (e) {
+      setError(mensajeDeError(e));
       setGuardando(false);
     }
   }
 
   async function omitir() {
     try {
-      await programacionesApi.omitir(pendiente.id);
+      await programacionesDb.omitir(pendiente.id);
       onListo(`Se omitió el periodo de ${pendiente.descripcion}.`);
     } catch (e) {
-      setError(esErrorDeRed(e) ? 'Sin conexión: para omitir un periodo necesitas internet.' : mensajeDeError(e));
+      setError(mensajeDeError(e));
     }
   }
 

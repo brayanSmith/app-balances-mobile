@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -28,10 +27,11 @@ import { MovimientoSheet } from '@/components/MovimientoSheet';
 import { Segmentado, type OpcionSegmentado } from '@/components/Segmentado';
 import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { mensajeDeError, movimientosApi } from '@/lib/api';
+import { mensajeDeError } from '@/lib/api';
+import { movimientosDb } from '@/lib/db/movimientos';
+import { useConsulta } from '@/lib/db/useConsulta';
 import { desplazar, esFechaValida, formatearFechaCorta, formatearMonto, hoy } from '@/lib/format';
 import { evolucion as calcularEvolucion, filtrar, totales, type FiltrosHistorial } from '@/lib/historial';
-import { conCache } from '@/lib/offline';
 import { radio, type Paleta } from '@/lib/theme';
 import type { Evolucion, Movimiento, TipoMovimiento } from '@/lib/types';
 
@@ -39,7 +39,7 @@ type Agrupacion = Evolucion['agrupacion'];
 
 interface EstadoSheet {
   abierto: boolean;
-  id: number | null;
+  id: string | null;
   clave: number;
 }
 
@@ -56,20 +56,18 @@ export default function HistorialScreen() {
   const [busqueda, setBusqueda] = useState('');
   const [q, setQ] = useState(''); // la búsqueda se aplica cuando se deja de escribir
 
-  // Todos los movimientos: se piden una vez y los filtros se aplican aquí.
-  const [todos, setTodos] = useState<Movimiento[]>([]);
-  const [cargando, setCargando] = useState(true);
+  // Todos los movimientos de la base local (se actualizan solos); los filtros se aplican aquí.
+  const consulta = useConsulta(() => movimientosDb.listar({}), ['movimientos', 'categorias', 'programaciones'], []);
+  const todos = useMemo(() => consulta.datos ?? [], [consulta.datos]);
+  const cargando = consulta.datos === undefined && consulta.cargando;
+  const error = consulta.error ? mensajeDeError(consulta.error) : null;
   const [refrescando, setRefrescando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [guardadoEn, setGuardadoEn] = useState<number | null>(null);
-  const { version } = useSincronizacion();
+  const { sincronizar } = useSincronizacion();
   const [sheet, setSheet] = useState<EstadoSheet>({
     abierto: false,
     id: null,
     clave: 0,
   });
-  // Si llega una respuesta vieja después de una más nueva, se descarta.
-  const peticion = useRef(0);
 
   // Buscar ya no pide nada al servidor: solo una pausa corta para no filtrar en cada tecla.
   useEffect(() => {
@@ -104,40 +102,10 @@ export default function HistorialScreen() {
     setAgrupacion(null); // cada período arranca con la agrupación que mejor le queda
   }
 
-  /**
-   * Una sola petición con todos los movimientos. Al volver a la pantalla se usa lo
-   * que está en memoria; solo se pide de nuevo si algo cambió (crear, editar,
-   * borrar, sincronizar), pasados 10 minutos o al deslizar para recargar (forzar).
-   */
-  const cargar = useCallback(
-    async (forzar = false) => {
-      const n = ++peticion.current;
-      setError(null);
-      try {
-        const r = await conCache('historial:todos', () => movimientosApi.listar({}), { forzar });
-        if (n !== peticion.current) return;
-        setTodos(r.datos);
-        setGuardadoEn(r.guardadoEn);
-      } catch (e) {
-        if (n === peticion.current) setError(mensajeDeError(e));
-      } finally {
-        if (n === peticion.current) setCargando(false);
-      }
-      // "version" cambia al enviar lo que estaba en cola o al volver la conexión.
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [version],
-  );
-
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
-
+  // Deslizar hacia abajo: trae lo registrado desde otros dispositivos.
   async function refrescar() {
     setRefrescando(true);
-    await cargar(true);
+    await sincronizar();
     setRefrescando(false);
   }
 
@@ -182,13 +150,13 @@ export default function HistorialScreen() {
     setDesplegados(new Set());
   }
 
-  const abrirMovimiento = (id: number) => setSheet((s) => ({ abierto: true, id, clave: s.clave + 1 }));
+  const abrirMovimiento = (id: string) => setSheet((s) => ({ abierto: true, id, clave: s.clave + 1 }));
   const balance = resumen.balance;
   const cerrarSheet = () => setSheet((s) => ({ ...s, abierto: false }));
 
   const encabezado = (
     <View style={{ gap: 14, paddingBottom: 4 }}>
-      <EstadoConexion guardadoEn={guardadoEn} onReintentar={() => cargar(true)} />
+      <EstadoConexion />
 
       <View style={styles.buscador}>
         <Ionicons name="search" size={18} color={colores.textoSuave} />
@@ -332,7 +300,7 @@ export default function HistorialScreen() {
       ) : (
         <SectionList
           sections={fechasValidas && !cargando ? secciones : []}
-          keyExtractor={(m) => String(m.id)}
+          keyExtractor={(m) => m.id}
           ListHeaderComponent={encabezado}
           contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
           stickySectionHeadersEnabled={false}
@@ -351,10 +319,7 @@ export default function HistorialScreen() {
         visible={sheet.abierto}
         id={sheet.id}
         onClose={cerrarSheet}
-        onGuardado={() => {
-          cerrarSheet();
-          cargar();
-        }}
+        onGuardado={cerrarSheet}
       />
     </View>
   );

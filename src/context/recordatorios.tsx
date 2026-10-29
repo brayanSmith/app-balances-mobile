@@ -2,8 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, use, useCallback, useEffect, useRef, useState, type PropsWithChildren } from 'react';
 import { Alert, AppState, Linking } from 'react-native';
 
-import { programacionesApi } from '@/lib/api';
-import { alInvalidarCache, conCache } from '@/lib/offline';
+import { alCambiar } from '@/lib/db';
+import { programacionesDb } from '@/lib/db/programaciones';
 import {
   cancelarRecordatorios,
   estadoPermiso,
@@ -46,7 +46,7 @@ export function RecordatoriosProvider({ children }: PropsWithChildren) {
     if (!recordatoriosDisponibles || !activosRef.current || ocupado.current) return;
     ocupado.current = true;
     try {
-      const { datos: pendientes } = await conCache('recordatorios', () => programacionesApi.pendientes({ dias: DIAS }));
+      const pendientes = await programacionesDb.pendientes({ dias: DIAS });
       let permiso = await estadoPermiso();
       // Se pregunta solo cuando hay algo que recordar, no apenas se abre la app.
       if (permiso === 'preguntar' && pendientes.length > 0) {
@@ -54,7 +54,7 @@ export function RecordatoriosProvider({ children }: PropsWithChildren) {
       }
       if (permiso === 'concedido') await programarRecordatorios(pendientes);
     } catch {
-      // Sin conexión y sin copia guardada: se reintenta en la próxima ocasión.
+      // Se reintenta en la próxima ocasión.
     } finally {
       ocupado.current = false;
     }
@@ -81,7 +81,7 @@ export function RecordatoriosProvider({ children }: PropsWithChildren) {
       espera = setTimeout(actualizar, 1000); // agrupa varios cambios seguidos
     };
     const app = AppState.addEventListener('change', (estado) => estado === 'active' && pronto());
-    const dejarDeOir = alInvalidarCache(pronto);
+    const dejarDeOir = alCambiar((tablas) => tablas.some((t) => t !== 'categorias') && pronto());
     return () => {
       clearTimeout(espera);
       app.remove();

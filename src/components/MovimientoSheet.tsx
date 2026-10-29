@@ -20,12 +20,13 @@ import { CategoriaIcono } from '@/components/CategoriaIcono';
 import { CategoriaSheet } from '@/components/CategoriaSheet';
 import { Segmentado } from '@/components/Segmentado';
 import { useCategorias } from '@/context/categorias';
-import { nuevoClienteId, useSincronizacion } from '@/context/sincronizacion';
+import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { adjuntosApi, mensajeDeError, movimientosApi } from '@/lib/api';
-import { reducirImagen } from '@/lib/imagenes';
+import { adjuntosApi, mensajeDeError } from '@/lib/api';
+import { adjuntosDb } from '@/lib/db/adjuntos';
+import { movimientosDb } from '@/lib/db/movimientos';
 import { ayer, esFechaValida, formatearFecha, formatearMonto, hoy, proximaFecha } from '@/lib/format';
-import { esErrorDeRed, hayConexion } from '@/lib/offline';
+import { esErrorDeRed } from '@/lib/offline';
 import { conAlpha, type Paleta, radio } from '@/lib/theme';
 import type {
   Adjunto,
@@ -46,9 +47,9 @@ const FRECUENCIAS: { valor: Frecuencia; texto: string }[] = [
 interface Props {
   visible: boolean;
   /** Movimiento a editar; null para crear uno nuevo. */
-  id: number | null;
+  id: string | null;
   onClose: () => void;
-  /** Con mensaje cuando se guardó sin conexión (quedó en cola). */
+  /** Con mensaje si algo quedó a medias (p. ej. quitar comprobantes sin conexión). */
   onGuardado: (mensaje?: string) => void;
 }
 
@@ -56,15 +57,13 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
   const editando = id !== null;
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { categorias, recargar } = useCategorias();
-  const { encolar } = useSincronizacion();
-  // Id para crearlo: si el envío se repite (señal inestable), la API no lo duplica.
-  const [clienteId] = useState(nuevoClienteId);
+  const { categorias } = useCategorias();
+  const { modo, subirAdjuntos } = useSincronizacion();
 
   const [tipo, setTipo] = useState<TipoMovimiento>('gasto');
   const [monto, setMonto] = useState('');
   const [descripcion, setDescripcion] = useState('');
-  const [categoriaId, setCategoriaId] = useState<number | null>(null);
+  const [categoriaId, setCategoriaId] = useState<string | null>(null);
   const [fecha, setFecha] = useState(hoy());
 
   const [programado, setProgramado] = useState(false);
@@ -75,6 +74,8 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
   const [aplicarASiguientes, setAplicarASiguientes] = useState(false);
 
   const [adjuntos, setAdjuntos] = useState<Adjunto[]>([]);
+  // Los comprobantes ya subidos se piden a la API: sin conexión no se pueden ver.
+  const [adjuntosSinRed, setAdjuntosSinRed] = useState(false);
   const [adjuntosAEliminar, setAdjuntosAEliminar] = useState<Adjunto[]>([]);
   const [archivosNuevos, setArchivosNuevos] = useState<ArchivoLocal[]>([]);
 
@@ -85,7 +86,7 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
 
   useEffect(() => {
     if (id === null) return;
-    movimientosApi
+    movimientosDb
       .ver(id)
       .then((m) => {
         setTipo(m.tipo);
@@ -93,7 +94,12 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
         setDescripcion(m.descripcion);
         setCategoriaId(m.categoria?.id ?? null);
         setFecha(m.fecha);
-        setAdjuntos(m.adjuntos ?? []);
+        if (m.adjuntos_count > 0) {
+          // En la nube los archivos están en la API; en una cuenta local, en el teléfono.
+          (modo === 'local' ? adjuntosDb.listar(id) : adjuntosApi.listar(id))
+            .then(setAdjuntos)
+            .catch(() => setAdjuntosSinRed(true));
+        }
         if (m.programacion) {
           setProgramado(true);
           setIntervalo(String(m.programacion.intervalo));
@@ -104,7 +110,7 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
       })
       .catch((e) => setError(mensajeDeError(e)))
       .finally(() => setCargando(false));
-  }, [id]);
+  }, [id, modo]);
 
   const colorTipo = tipo === 'ingreso' ? colores.ingreso : colores.gasto;
   const categoriasDelTipo = categorias.filter((c) => c.tipo === tipo);
@@ -146,54 +152,43 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
       }),
       ...(programacion && !programacion.es_base && { actualizar_programado: aplicarASiguientes }),
     };
+    let movimientoId: string;
     try {
-      // Lo nuevo va a la cola y la hoja se cierra al instante: se envía en segundo
-      // plano (enseguida, o cuando vuelva internet).
-      if (id === null) {
-        await encolarNuevo(input);
-        return;
-      }
+      // Se guarda en el teléfono al instante; la sincronización lo envía a la API.
+      movimientoId = id === null ? (await movimientosDb.crear(input)).id : (await movimientosDb.actualizar(id, input)).id;
+    } catch (e) {
+      setError(mensajeDeError(e));
+      setGuardando(false);
+      return;
+    }
 
-      const movimientoId = (await movimientosApi.actualizar(id, input)).id;
+    // Los comprobantes nuevos se suben en segundo plano, cuando el movimiento ya esté en la API.
+    await subirAdjuntos(movimientoId, archivosNuevos).catch(() => {});
 
-      // A la vez, sacando de la lista lo que ya se procesó por si algo falla a mitad.
-      await Promise.all([
-        ...adjuntosAEliminar.map(async (adjunto) => {
-          await adjuntosApi.eliminar(adjunto.id);
-          setAdjuntosAEliminar((lista) => lista.filter((a) => a !== adjunto));
-        }),
-        ...archivosNuevos.map(async (archivo) => {
-          await adjuntosApi.subir(movimientoId, await reducirImagen(archivo));
-          setArchivosNuevos((lista) => lista.filter((a) => a !== archivo));
-        }),
-      ]);
+    // Quitar uno ya subido sí necesita internet (el archivo está en la API).
+    try {
+      await Promise.all(
+        adjuntosAEliminar.map((adjunto) =>
+          typeof adjunto.id === 'string' ? adjuntosDb.eliminar(adjunto.id) : adjuntosApi.eliminar(adjunto.id),
+        ),
+      );
       onGuardado();
     } catch (e) {
-      setError(
-        esErrorDeRed(e) ? 'Sin conexión: para editar un movimiento ya guardado necesitas internet.' : mensajeDeError(e),
+      onGuardado(
+        esErrorDeRed(e)
+          ? 'Movimiento guardado. Para quitar comprobantes necesitas internet: inténtalo de nuevo con conexión.'
+          : `Movimiento guardado, pero no se pudieron quitar los comprobantes: ${mensajeDeError(e)}`,
       );
-      setGuardando(false);
     }
-  }
-
-  async function encolarNuevo(input: MovimientoInput) {
-    await encolar(clienteId, { tipo: 'movimiento', datos: input }, archivosNuevos, {
-      tipo,
-      monto: montoNumerico,
-      descripcion: input.descripcion,
-      fecha,
-      categoria: categorias.find((c) => c.id === categoriaId) ?? null,
-    });
-    onGuardado(hayConexion() ? undefined : 'Guardado sin conexión: se enviará solo cuando vuelva internet.');
   }
 
   async function eliminar() {
     if (id === null) return;
     try {
-      await movimientosApi.eliminar(id);
+      await movimientosDb.eliminar(id);
       onGuardado();
     } catch (e) {
-      setError(esErrorDeRed(e) ? 'Sin conexión: para eliminar un movimiento necesitas internet.' : mensajeDeError(e));
+      setError(mensajeDeError(e));
     }
   }
 
@@ -331,6 +326,9 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
             </View>
           </View>
 
+          {adjuntosSinRed && (
+            <Text style={styles.ayuda}>Sin conexión: los comprobantes ya guardados se ven cuando vuelva internet.</Text>
+          )}
           <Adjuntos
             existentes={adjuntos.filter((a) => !adjuntosAEliminar.includes(a))}
             nuevos={archivosNuevos}
@@ -446,8 +444,7 @@ export function MovimientoSheet({ visible, id, onClose, onGuardado }: Props) {
           visible
           tipoInicial={tipo}
           onClose={() => setCreandoCategoria(false)}
-          onGuardada={async (nueva) => {
-            await recargar();
+          onGuardada={(nueva) => {
             setCategoriaId(nueva.id);
             setCreandoCategoria(false);
           }}

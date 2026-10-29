@@ -1,6 +1,5 @@
 import { useNetInfo } from '@react-native-community/netinfo';
 import { isAxiosError } from 'axios';
-import * as Crypto from 'expo-crypto';
 import {
   createContext,
   use,
@@ -10,27 +9,54 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
-import { AppState } from 'react-native';
+import { ActivityIndicator, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { adjuntosApi, mensajeDeError, movimientosApi, programacionesApi } from '@/lib/api';
-import { borrarArchivo, guardarArchivos, guardarCola, leerCola, type EnCola, type Operacion } from '@/lib/cola';
-import { esErrorDeRed, hayConexion } from '@/lib/offline';
-import type { ArchivoLocal } from '@/lib/types';
+import { useSession } from '@/context/auth';
+import { useEstilos, useTema } from '@/context/tema';
+import {
+  guardarAdjuntosPendientes,
+  leerAdjuntosPendientes,
+  type AdjuntosPendientes,
+} from '@/lib/adjuntosPendientes';
+import { adjuntosApi, api, authApi, mensajeDeError } from '@/lib/api';
+import { borrarArchivo, guardarArchivos, guardarCola, leerCola } from '@/lib/cola';
+import { abrirBase, alCambiar, base, borrarBase } from '@/lib/db';
+import { adjuntosDb, borrarAdjuntosLocales } from '@/lib/db/adjuntos';
+import { completarPasoALocal, pasarALocal, pasarANube, pasoALocalPendiente } from '@/lib/db/modo';
+import { guardarEstado, leerEstado, pendientesDeEnviar, sincronizarBase, yaSincronizada } from '@/lib/db/sync';
+import { esErrorDeRed, hayConexion, invalidarCache } from '@/lib/offline';
+import { radio, type Paleta } from '@/lib/theme';
+import type { Almacenamiento, ArchivoLocal } from '@/lib/types';
+
+/*
+ * La app lee y escribe en la base del teléfono (lib/db). Este proveedor la abre al
+ * entrar y, según el almacenamiento de la cuenta (lo elige el administrador):
+ *
+ * - nube: la mantiene al día con la API (al abrir la app, al volver la conexión, al
+ *   volver a la app, cada pocos minutos y poco después de cada cambio) y sube los
+ *   comprobantes, que viven en la API.
+ * - local: no sincroniza; los comprobantes se guardan en el teléfono. Solo revisa de
+ *   vez en cuando si el administrador cambió el almacenamiento.
+ *
+ * Al cambiar de nube a local se baja todo (también los comprobantes) y se borra del
+ * servidor; de local a nube, se vuelve a subir todo.
+ */
 
 interface SincronizacionValue {
-  /** Lo registrado sin conexión que aún no llega a la API. */
-  cola: EnCola[];
+  modo: Almacenamiento;
   enLinea: boolean;
   sincronizando: boolean;
-  /** Aumenta al enviar algo de la cola o al volver la conexión: las pantallas lo usan para recargar. */
+  /** Cambios guardados en el teléfono que aún no llegan a la API (con los comprobantes). */
+  porEnviar: number;
+  /** Lo que falló en la última sincronización (sin contar la falta de red). */
+  error: string | null;
+  /** Aumenta cuando la sincronización trae o envía algo (el análisis, que viene de la API, recarga). */
   version: number;
-  /** Guarda para enviar después. `id` es el cliente_id ya usado en el intento fallido. */
-  encolar: (id: string, operacion: Operacion, archivos: ArchivoLocal[], vista: EnCola['vista']) => Promise<void>;
   sincronizar: () => Promise<void>;
-  reintentar: (id: string) => Promise<void>;
-  descartar: (id: string) => Promise<void>;
-  /** Al cerrar sesión. */
-  vaciar: () => Promise<void>;
+  /** Guarda los comprobantes: en local, en el teléfono; en la nube, los sube cuando el movimiento ya esté en la API. */
+  subirAdjuntos: (movimientoId: string, archivos: ArchivoLocal[]) => Promise<void>;
+  /** Tras restablecer la cuenta: borra la base del teléfono y la vuelve a preparar. */
+  reiniciar: () => Promise<void>;
 }
 
 const SincronizacionContext = createContext<SincronizacionValue | null>(null);
@@ -41,180 +67,346 @@ export function useSincronizacion() {
   return value;
 }
 
-/** Id para lo que se crea en la app (cliente_id): reenviarlo no duplica en la API. */
-export const nuevoClienteId = () => Crypto.randomUUID();
-
-type Resultado = 'ok' | 'sin-red' | 'error';
-type Cambio = (cola: EnCola[]) => EnCola[];
+const CADA = 5 * 60 * 1000; // también se baja lo de otros dispositivos cada 5 minutos
+const ESPERA_CAMBIO = 1500; // agrupa varios cambios seguidos en un solo envío
 
 /**
- * Envía un elemento: crea el movimiento o pago (si falta) y sube sus comprobantes
- * a la vez. `alCrear` avisa apenas existe en la API, para que las pantallas lo muestren.
+ * Lo que quedó en la cola de versiones anteriores de la app (antes de la base local):
+ * se envía una vez con los endpoints de siempre y la sincronización lo trae de vuelta.
  */
-async function enviar(
-  elemento: EnCola,
-  actualizar: (cambio: Cambio) => Promise<void>,
-  alCrear: () => void,
-): Promise<Resultado> {
-  const cambiar = (cambio: (e: EnCola) => Partial<EnCola>) =>
-    actualizar((cola) => cola.map((e) => (e.id === elemento.id ? { ...e, ...cambio(e) } : e)));
-
-  try {
-    let movimientoId = elemento.movimientoId;
-    if (movimientoId === null) {
-      const { operacion } = elemento;
-      const movimiento =
-        operacion.tipo === 'movimiento'
-          ? await movimientosApi.crear({ ...operacion.datos, cliente_id: elemento.id })
-          : await programacionesApi.pagar(operacion.programacionId, { ...operacion.datos, cliente_id: elemento.id });
-      const id = movimiento.id;
-      movimientoId = id;
-      await cambiar(() => ({ movimientoId: id }));
-      alCrear();
-    }
-
-    // Cada comprobante sale de la cola apenas sube (si uno falla, los demás no se repiten).
-    const id = movimientoId;
-    await Promise.all(
-      elemento.archivos.map(async (archivo) => {
+async function enviarColaAntigua() {
+  let restante = await leerCola();
+  for (const elemento of [...restante]) {
+    try {
+      let id = elemento.movimientoId;
+      if (id === null) {
+        const { operacion } = elemento;
+        const { data } = await api.post<{ data: { id: number } }>(
+          operacion.tipo === 'movimiento' ? '/movimientos' : `/programaciones/${operacion.programacionId}/pagar`,
+          { ...operacion.datos, cliente_id: elemento.id },
+        );
+        id = data.data.id;
+      }
+      for (const archivo of elemento.archivos) {
         await adjuntosApi.subir(id, archivo);
         borrarArchivo(archivo);
-        await cambiar((e) => ({ archivos: e.archivos.filter((a) => a.uri !== archivo.uri) }));
-      }),
-    );
-
-    await actualizar((cola) => cola.filter((e) => e.id !== elemento.id));
-    return 'ok';
-  } catch (error) {
-    // Sin red (o sesión vencida): se reintenta todo más tarde.
-    if (esErrorDeRed(error) || (isAxiosError(error) && error.response?.status === 401)) return 'sin-red';
-
-    await cambiar(() => ({
-      error: isAxiosError(error)
-        ? mensajeDeError(error)
-        : 'No se pudo leer un comprobante guardado. Descártalo o vuelve a registrarlo.',
-    }));
-    return 'error';
+      }
+    } catch (error) {
+      if (esErrorDeRed(error)) return; // se reintenta en la próxima sincronización
+      // La API lo rechazó: ya no hay pantalla para corregirlo.
+      elemento.archivos.forEach(borrarArchivo);
+    }
+    restante = restante.filter((e) => e.id !== elemento.id);
+    await guardarCola(restante);
   }
 }
 
 export function SincronizacionProvider({ children }: PropsWithChildren) {
+  const { user, actualizarUsuario } = useSession();
+  // Solo se monta dentro de (app), es decir, con sesión.
+  const usuario = user!.id;
+  const modo: Almacenamiento = user!.almacenamiento ?? 'nube';
   const red = useNetInfo();
   const enLinea = red.isConnected !== false && red.isInternetReachable !== false;
-  const [cola, setCola] = useState<EnCola[]>([]);
-  const [sincronizando, setSincronizando] = useState(false);
-  const [version, setVersion] = useState(0);
-  // La cola "real" (la que se guarda); el estado es su copia para pintar.
-  const colaRef = useRef<EnCola[]>([]);
-  const ocupado = useRef(false);
 
-  const actualizar = useCallback(async (cambio: Cambio) => {
-    colaRef.current = cambio(colaRef.current);
-    setCola(colaRef.current);
-    await guardarCola(colaRef.current);
-  }, []);
+  // null: la base está lista. Si no, se muestra la pantalla de carga (o el error).
+  const [preparando, setPreparando] = useState<{ error: string | null; mensaje?: string } | null>({ error: null });
+  const [sincronizando, setSincronizando] = useState(false);
+  const [porEnviar, setPorEnviar] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const adjuntos = useRef<AdjuntosPendientes[]>([]);
+  const lista = preparando === null;
+
+  const contar = useCallback(async () => {
+    if (modo === 'local') {
+      setPorEnviar(0);
+      return;
+    }
+    const archivos = adjuntos.current.reduce((n, a) => n + a.archivos.length, 0);
+    setPorEnviar((await pendientesDeEnviar()) + archivos);
+  }, [modo]);
+
+  const guardarAdjuntos = useCallback(
+    async (cambio: (lista: AdjuntosPendientes[]) => AdjuntosPendientes[]) => {
+      adjuntos.current = cambio(adjuntos.current).filter((a) => a.archivos.length > 0);
+      await guardarAdjuntosPendientes(usuario, adjuntos.current);
+    },
+    [usuario],
+  );
+
+  /** Sube los comprobantes pendientes. Devuelve si subió alguno. */
+  const subirPendientes = useCallback(async () => {
+    let subio = false;
+    for (const pendiente of [...adjuntos.current]) {
+      const quitar = (archivo: ArchivoLocal) =>
+        guardarAdjuntos((lista) =>
+          lista.map((a) =>
+            a.movimientoId === pendiente.movimientoId ? { ...a, archivos: a.archivos.filter((x) => x !== archivo) } : a,
+          ),
+        );
+
+      for (const archivo of pendiente.archivos) {
+        try {
+          await adjuntosApi.subir(pendiente.movimientoId, archivo);
+          subio = true;
+        } catch (e) {
+          if (esErrorDeRed(e)) throw e;
+          if (isAxiosError(e) && e.response?.status === 404) {
+            // El movimiento no está en la API: si aquí sigue existiendo, todavía no se envía (se espera);
+            // si se borró, el comprobante ya no tiene a dónde ir.
+            const existe = await base().getFirstAsync('SELECT 1 FROM movimientos WHERE id = ?', pendiente.movimientoId);
+            if (existe) break;
+          } else {
+            setError(`No se pudo subir ${archivo.nombre}: ${mensajeDeError(e)}`);
+          }
+        }
+        borrarArchivo(archivo);
+        await quitar(archivo);
+      }
+    }
+    return subio;
+  }, [guardarAdjuntos]);
+
+  /** Si el administrador cambió el almacenamiento, el nuevo usuario hace que todo se vuelva a preparar. */
+  const revisarCuenta = useCallback(async () => {
+    try {
+      const actual = await authApi.user();
+      if ((actual.almacenamiento ?? 'nube') !== modo) await actualizarUsuario(actual);
+    } catch {
+      // Sin red o servidor caído: se revisa en la próxima ocasión.
+    }
+  }, [modo, actualizarUsuario]);
+
+  const ocupado = useRef(false);
+  const otraVez = useRef(false);
 
   const sincronizar = useCallback(async () => {
-    if (ocupado.current || !hayConexion()) return;
+    if (!hayConexion()) return;
+    // Si ya hay una en curso, al terminar se hace otra (para no subir un comprobante dos veces).
+    if (ocupado.current) {
+      otraVez.current = true;
+      return;
+    }
     ocupado.current = true;
     setSincronizando(true);
-    let enviados = 0;
-    const intentados = new Set<string>();
-    const recargar = () => setVersion((v) => v + 1);
     try {
-      // En orden; la cola se vuelve a leer tras cada envío, así que lo que se
-      // registre mientras tanto sale en esta misma vuelta. Si se cae la red, se
-      // detiene y espera la próxima conexión.
-      for (;;) {
-        const siguiente = colaRef.current.find((e) => !e.error && !intentados.has(e.id));
-        if (!siguiente) break;
-        intentados.add(siguiente.id);
-        const resultado = await enviar(siguiente, actualizar, recargar);
-        if (resultado === 'sin-red') break;
-        if (resultado === 'ok') enviados++;
-      }
+      do {
+        otraVez.current = false;
+        if (modo === 'local') {
+          // Solo falta algo si quedó a medias el paso de la nube al teléfono.
+          if (await pasoALocalPendiente()) await completarPasoALocal();
+          setError(null);
+          break;
+        }
+        await enviarColaAntigua();
+        let cambio = await sincronizarBase();
+        // Con comprobantes nuevos se baja otra vez para traer su cantidad.
+        if (await subirPendientes()) cambio = (await sincronizarBase()) || true;
+        if (cambio) {
+          invalidarCache(['analisis:']);
+          setVersion((v) => v + 1);
+        }
+        setError(null);
+      } while (otraVez.current);
+    } catch (e) {
+      // 403: el administrador la pasó a "solo en el teléfono" y la app aún no se enteró.
+      if (isAxiosError(e) && e.response?.status === 403) void revisarCuenta();
+      else if (!esErrorDeRed(e)) setError(mensajeDeError(e));
     } finally {
       ocupado.current = false;
       setSincronizando(false);
-      // Ya con los comprobantes: que se vea su cantidad.
-      if (enviados > 0) recargar();
+      await contar().catch(() => {});
     }
-  }, [actualizar]);
+  }, [modo, contar, subirPendientes, revisarCuenta]);
 
-  // Al abrir la app: cargar la cola guardada e intentar enviarla.
-  useEffect(() => {
-    leerCola().then((guardada) => {
-      colaRef.current = guardada;
-      setCola(guardada);
-      sincronizar();
-    });
-  }, [sincronizar]);
+  /** De la nube al teléfono (ver lib/db/modo). */
+  const irALocal = useCallback(
+    async (nuncaSeUso: boolean) => {
+      await pasarALocal(nuncaSeUso, adjuntos.current);
+      await guardarAdjuntos(() => []);
+      try {
+        await completarPasoALocal();
+      } catch (e) {
+        // Sin internet se sigue en local y se completa después; un teléfono nuevo sí necesita los datos.
+        if (nuncaSeUso || !esErrorDeRed(e)) throw e;
+      }
+    },
+    [guardarAdjuntos],
+  );
 
-  // Al volver la conexión (con un respiro para que la red se estabilice): enviar
-  // la cola y que las pantallas que muestran datos guardados se recarguen.
-  const estuvoSinRed = useRef(false);
-  useEffect(() => {
-    if (!enLinea) {
-      estuvoSinRed.current = true;
-      return;
-    }
-    const espera = setTimeout(() => {
-      sincronizar().then(() => {
-        if (!estuvoSinRed.current) return;
-        estuvoSinRed.current = false;
-        setVersion((v) => v + 1);
+  /** Del teléfono a la nube: los comprobantes locales pasan a la cola de subida. */
+  const irANube = useCallback(async () => {
+    const locales = await pasarANube();
+    await guardarAdjuntos((lista) => [...lista, ...locales]);
+  }, [guardarAdjuntos]);
+
+  /** Abre la base y la deja lista para el almacenamiento de la cuenta. */
+  const preparar = useCallback(async () => {
+    try {
+      await abrirBase(usuario);
+      adjuntos.current = await leerAdjuntosPendientes(usuario);
+      const modoBase = await leerEstado('modo');
+
+      if (modo === 'local' && modoBase !== 'local') {
+        setPreparando({ error: null, mensaje: 'Pasando tus datos a este teléfono…' });
+        await irALocal(modoBase === null && !(await yaSincronizada()));
+      } else if (modo === 'nube' && modoBase === 'local') {
+        setPreparando({ error: null, mensaje: 'Preparando tus datos para la nube…' });
+        await irANube();
+      } else if (modo === 'nube') {
+        // Primera vez en este teléfono: se baja todo antes de mostrar la app.
+        if (!(await yaSincronizada())) {
+          await enviarColaAntigua();
+          await sincronizarBase();
+        }
+        await guardarEstado('modo', 'nube');
+      }
+
+      setPreparando(null);
+      await contar();
+      void sincronizar();
+    } catch (e) {
+      setPreparando({
+        error: esErrorDeRed(e)
+          ? 'Necesitas internet la primera vez para descargar tus datos a este teléfono.'
+          : mensajeDeError(e),
       });
+    }
+  }, [usuario, modo, irALocal, irANube, contar, sincronizar]);
+
+  // Al entrar, al cambiar de cuenta o de almacenamiento. preparar solo cambia el estado después de abrir la base.
+  useEffect(() => {
+    void Promise.resolve().then(preparar);
+  }, [preparar]);
+
+  // Poco después de cada cambio local se envía (los avisos que da la propia sincronización no tienen nada pendiente).
+  useEffect(() => {
+    if (!lista || modo === 'local') return;
+    let espera: ReturnType<typeof setTimeout> | undefined;
+    const dejarDeOir = alCambiar(() => {
+      clearTimeout(espera);
+      espera = setTimeout(async () => {
+        await contar().catch(() => {});
+        if ((await pendientesDeEnviar().catch(() => 0)) > 0) void sincronizar();
+      }, ESPERA_CAMBIO);
+    });
+    return () => {
+      clearTimeout(espera);
+      dejarDeOir();
+    };
+  }, [lista, modo, contar, sincronizar]);
+
+  // Al volver la conexión (con un respiro para que la red se estabilice).
+  useEffect(() => {
+    if (!lista || !enLinea) return;
+    const espera = setTimeout(() => {
+      void revisarCuenta();
+      void sincronizar();
     }, 1500);
     return () => clearTimeout(espera);
-  }, [enLinea, sincronizar]);
+  }, [lista, enLinea, revisarCuenta, sincronizar]);
 
-  // Al volver a la app desde segundo plano.
+  // Al volver a la app y, mientras está abierta, cada pocos minutos.
   useEffect(() => {
-    const suscripcion = AppState.addEventListener('change', (estado) => {
-      if (estado === 'active') sincronizar();
-    });
-    return () => suscripcion.remove();
-  }, [sincronizar]);
+    if (!lista) return;
+    const alDia = () => {
+      void revisarCuenta();
+      void sincronizar();
+    };
+    const app = AppState.addEventListener('change', (estado) => estado === 'active' && alDia());
+    const intervalo = setInterval(() => AppState.currentState === 'active' && alDia(), CADA);
+    return () => {
+      app.remove();
+      clearInterval(intervalo);
+    };
+  }, [lista, revisarCuenta, sincronizar]);
 
-  const encolar = useCallback<SincronizacionValue['encolar']>(
-    async (id, operacion, archivos, vista) => {
-      const copias = await guardarArchivos(id, archivos);
-      await actualizar((actual) => [
-        ...actual,
-        { id, operacion, archivos: copias, movimientoId: null, creado: Date.now(), error: null, vista },
-      ]);
-      // Con internet se envía ya, en segundo plano (quien encola no espera).
+  const subirAdjuntos = useCallback<SincronizacionValue['subirAdjuntos']>(
+    async (movimientoId, archivos) => {
+      if (archivos.length === 0) return;
+      if (modo === 'local') {
+        await adjuntosDb.agregar(movimientoId, archivos);
+        return;
+      }
+      const copias = await guardarArchivos(movimientoId, archivos);
+      await guardarAdjuntos((lista) => [...lista, { movimientoId, archivos: copias }]);
+      await contar();
       void sincronizar();
     },
-    [actualizar, sincronizar],
+    [modo, guardarAdjuntos, contar, sincronizar],
   );
 
-  const reintentar = useCallback(
-    async (id: string) => {
-      await actualizar((actual) => actual.map((e) => (e.id === id ? { ...e, error: null } : e)));
-      await sincronizar();
-    },
-    [actualizar, sincronizar],
-  );
+  const reiniciar = useCallback(async () => {
+    setPreparando({ error: null });
+    adjuntos.current.forEach((a) => a.archivos.forEach(borrarArchivo));
+    await guardarAdjuntos(() => []);
+    await borrarBase(usuario);
+    borrarAdjuntosLocales(usuario);
+    await preparar();
+  }, [usuario, guardarAdjuntos, preparar]);
 
-  const descartar = useCallback(
-    async (id: string) => {
-      colaRef.current.find((e) => e.id === id)?.archivos.forEach(borrarArchivo);
-      await actualizar((actual) => actual.filter((e) => e.id !== id));
-    },
-    [actualizar],
-  );
+  const reintentarPreparar = () => {
+    setPreparando({ error: null });
+    void preparar();
+  };
 
-  const vaciar = useCallback(async () => {
-    colaRef.current.forEach((e) => e.archivos.forEach(borrarArchivo));
-    await actualizar(() => []);
-  }, [actualizar]);
+  if (preparando) {
+    return <Preparando error={preparando.error} mensaje={preparando.mensaje} onReintentar={reintentarPreparar} />;
+  }
 
   return (
     <SincronizacionContext
-      value={{ cola, enLinea, sincronizando, version, encolar, sincronizar, reintentar, descartar, vaciar }}
+      value={{ modo, enLinea, sincronizando, porEnviar, error, version, sincronizar, subirAdjuntos, reiniciar }}
     >
       {children}
     </SincronizacionContext>
   );
 }
+
+interface PreparandoProps {
+  error: string | null;
+  mensaje?: string;
+  onReintentar: () => void;
+}
+
+/** Mientras se abre la base, se descargan los datos por primera vez o se cambia de almacenamiento. */
+function Preparando({ error, mensaje = 'Preparando tus datos…', onReintentar }: PreparandoProps) {
+  const { colores } = useTema();
+  const styles = useEstilos(crearEstilos);
+
+  return (
+    <View style={styles.contenedor}>
+      {error ? (
+        <>
+          <Text style={styles.titulo}>No se pudieron cargar tus datos</Text>
+          <Text style={styles.texto}>{error}</Text>
+          <Pressable onPress={onReintentar} style={styles.boton}>
+            <Text style={styles.botonTexto}>Reintentar</Text>
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <ActivityIndicator size="large" color={colores.primario} />
+          <Text style={styles.texto}>{mensaje}</Text>
+        </>
+      )}
+    </View>
+  );
+}
+
+const crearEstilos = (colores: Paleta) =>
+  StyleSheet.create({
+    contenedor: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 14,
+      padding: 32,
+      backgroundColor: colores.fondo,
+    },
+    titulo: { fontSize: 18, fontWeight: '700', color: colores.texto, textAlign: 'center' },
+    texto: { fontSize: 14, color: colores.textoSuave, textAlign: 'center' },
+    boton: { backgroundColor: colores.primario, borderRadius: radio.md, paddingHorizontal: 20, paddingVertical: 12 },
+    botonTexto: { color: '#fff', fontWeight: '700' },
+  });

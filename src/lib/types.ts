@@ -10,10 +10,16 @@ export interface User {
   foto_url: string | null;
   /** false si entró con Google y aún no creó una contraseña (opcional: usuarios guardados antes). */
   tiene_password?: boolean;
+  /** Dónde guarda sus datos (lo elige el administrador). Sin el campo (usuarios guardados antes): nube. */
+  almacenamiento?: Almacenamiento;
 }
 
+/** nube: en el teléfono y sincronizado con la API. local: solo en el teléfono. */
+export type Almacenamiento = 'nube' | 'local';
+
 export interface Categoria {
-  id: number;
+  /** uuid generado en el dispositivo (el mismo en la API). */
+  id: string;
   tipo: TipoMovimiento;
   nombre: string;
   icono: string; // nombre de un ícono de Ionicons
@@ -24,7 +30,7 @@ export type CategoriaInput = Omit<Categoria, 'id'>;
 
 /** Regla de repetición de un movimiento programado. */
 export interface Programacion {
-  id: number;
+  id: string;
   intervalo: number; // cada N...
   frecuencia: Frecuencia; // ...días/semanas/meses/años
   fecha_fin: string | null;
@@ -33,9 +39,12 @@ export interface Programacion {
   es_base: boolean; // los próximos se copian de este movimiento
 }
 
-/** Comprobante guardado en la API. `url` es un enlace firmado que vence en 30 min. */
+/**
+ * Comprobante. En la nube: id numérico y `url` un enlace firmado que vence en 30 min.
+ * En una cuenta local: id uuid y `url` el archivo guardado en el teléfono (file://).
+ */
 export interface Adjunto {
-  id: number;
+  id: number | string;
   nombre: string;
   mime: string;
   tamano: number;
@@ -52,7 +61,7 @@ export interface ArchivoLocal {
 }
 
 export interface Movimiento {
-  id: number;
+  id: string;
   tipo: TipoMovimiento;
   monto: number;
   descripcion: string;
@@ -64,12 +73,6 @@ export interface Movimiento {
   adjuntos_count: number;
   programado: boolean;
   programacion: Programacion | null;
-  /** Solo en la app: registrado y todavía en la cola (aún no está en la API). */
-  local?: {
-    error: string | null;
-    /** Con internet se está enviando ahora; sin ella, espera la conexión. */
-    enviando?: boolean;
-  };
 }
 
 /** Filtros del listado y del resumen (ver MovimientoController::filtrados). */
@@ -79,13 +82,14 @@ export interface FiltrosMovimientos {
   hasta?: string;
   tipo?: TipoMovimiento;
   q?: string;
+  categoria_id?: string;
   /** Agrupación del gráfico de evolución; sin ella la API elige según el largo. */
   agrupacion?: 'dia' | 'semana' | 'mes' | 'anio';
 }
 
 /** Programado con un vencimiento por pagar (o por recibir, si es ingreso). */
 export interface Pendiente {
-  id: number; // id de la programación
+  id: string; // id de la programación
   tipo: TipoMovimiento;
   descripcion: string;
   monto: number; // estimado: el del último pago
@@ -102,7 +106,8 @@ export interface PagoInput {
   monto: number;
   fecha: string;
   actualizar_base: boolean;
-  cliente_id?: string;
+  /** Vacía: la del programado. */
+  descripcion?: string | null;
 }
 
 /** Datos que se pueden tomar de una columna del CSV a importar. */
@@ -155,16 +160,8 @@ export interface Previsualizacion {
   adjuntos: { referenciados: number; encontrados: number; faltantes: AdjuntoFaltante[] };
 }
 
-/** ZIP/RAR ya subido y extraído en la API; se usa por su token. */
-export interface ComprimidoSubido {
-  token: string;
-  nombre: string;
-  archivos: number;
-  omitidos: string[];
-}
-
 export interface Importacion {
-  id: number;
+  id: string;
   archivo: string;
   filas: number;
   importados: number;
@@ -190,17 +187,16 @@ export interface Pagina<T> {
 }
 
 export type MovimientoInput = Pick<Movimiento, 'tipo' | 'monto' | 'descripcion' | 'fecha'> & {
-  categoria_id: number | null;
+  categoria_id: string | null;
   programado?: boolean;
   intervalo?: number | null;
   frecuencia?: Frecuencia | null;
   fecha_fin?: string | null;
   actualizar_programado?: boolean; // "este y los siguientes"
-  cliente_id?: string; // id generado en la app: reenviarlo no duplica
 };
 
 export interface GastoPorCategoria {
-  categoria_id: number | null;
+  categoria_id: string | null;
   nombre: string;
   icono: string;
   color: string;

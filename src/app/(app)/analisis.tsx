@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Chips, type OpcionChip } from '@/components/Chips';
@@ -10,9 +9,10 @@ import { GraficoAnalisis, type SerieArea, type TipoGrafico } from '@/components/
 import { Segmentado } from '@/components/Segmentado';
 import { useSincronizacion } from '@/context/sincronizacion';
 import { useEstilos, useTema } from '@/context/tema';
-import { analisisApi, mensajeDeError } from '@/lib/api';
+import { mensajeDeError } from '@/lib/api';
+import { analisisDb } from '@/lib/db/analisis';
+import { useConsulta } from '@/lib/db/useConsulta';
 import { claveMes, desplazar, esFechaValida, formatearFechaCorta, formatearMonto, hoy, nombreMes } from '@/lib/format';
-import { conCache } from '@/lib/offline';
 import { radio, type Paleta } from '@/lib/theme';
 import type { AgrupacionAnalisis, Analisis } from '@/lib/types';
 
@@ -40,7 +40,7 @@ function agrupacionSugerida(desde: string, hasta: string): AgrupacionAnalisis {
 export default function AnalisisScreen() {
   const { colores } = useTema();
   const styles = useEstilos(crearEstilos);
-  const { version } = useSincronizacion();
+  const { sincronizar } = useSincronizacion();
 
   const [periodo, setPeriodo] = useState<Periodo>('anio');
   const [desdePersonalizado, setDesdePersonalizado] = useState(() => desplazar(hoy(), -1, 'anios'));
@@ -51,12 +51,7 @@ export default function AnalisisScreen() {
   const [tipo, setTipo] = useState<TipoGrafico>('area');
   const [serie, setSerie] = useState<SerieArea>('saldo');
 
-  const [analisis, setAnalisis] = useState<Analisis | null>(null);
-  const [cargando, setCargando] = useState(true);
   const [refrescando, setRefrescando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [guardadoEn, setGuardadoEn] = useState<number | null>(null);
-  const peticion = useRef(0);
   const [proyecciones] = useState(opcionesProyeccion);
 
   // "Todo" no se ofrece aquí (el análisis necesita una fecha de inicio).
@@ -69,40 +64,23 @@ export default function AnalisisScreen() {
   const puedeProyectar = hasta >= hoy();
   const proyectarHasta = puedeProyectar && proyectar !== 'no' ? proyectar : undefined;
 
-  const cargar = useCallback(
-    async (forzar = false) => {
-      if (!fechasValidas) return;
-      const n = ++peticion.current;
-      setCargando(true);
-      setError(null);
-      try {
-        const params = { desde, hasta, agrupacion, proyectar_hasta: proyectarHasta };
-        // Sin conexión se muestra lo último guardado de este mismo filtro.
-        const clave = `analisis:${periodo === 'personalizado' ? `${desde}:${hasta}` : periodo}:${agrupacion}:${proyectarHasta ?? ''}`;
-        const r = await conCache(clave, () => analisisApi.obtener(params), { forzar });
-        if (n !== peticion.current) return;
-        setAnalisis(r.datos);
-        setGuardadoEn(r.guardadoEn);
-      } catch (e) {
-        if (n === peticion.current) setError(mensajeDeError(e));
-      } finally {
-        if (n === peticion.current) setCargando(false);
-      }
-      // "version" cambia al enviar lo que estaba en cola o al volver la conexión.
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [desde, hasta, agrupacion, proyectarHasta, fechasValidas, periodo, version],
+  // De la base local: se recalcula solo cuando cambia algún movimiento o programado.
+  const consulta = useConsulta(
+    () =>
+      fechasValidas
+        ? analisisDb.obtener({ desde, hasta, agrupacion, proyectar_hasta: proyectarHasta })
+        : Promise.resolve(null),
+    ['movimientos', 'programaciones'],
+    [desde, hasta, agrupacion, proyectarHasta, fechasValidas],
   );
+  const analisis = consulta.datos ?? null;
+  const cargando = consulta.cargando;
+  const error = consulta.error ? mensajeDeError(consulta.error) : null;
 
-  useFocusEffect(
-    useCallback(() => {
-      cargar();
-    }, [cargar]),
-  );
-
+  // Deslizar hacia abajo: trae lo registrado desde otros dispositivos.
   async function refrescar() {
     setRefrescando(true);
-    await cargar(true);
+    await sincronizar();
     setRefrescando(false);
   }
 
@@ -115,7 +93,7 @@ export default function AnalisisScreen() {
       keyboardShouldPersistTaps="handled"
       refreshControl={<RefreshControl refreshing={refrescando} onRefresh={refrescar} tintColor={colores.primario} />}
     >
-      <EstadoConexion guardadoEn={guardadoEn} onReintentar={() => cargar(true)} />
+      <EstadoConexion />
 
       <Seccion titulo="Período">
         <FiltroPeriodo
